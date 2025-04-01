@@ -119,30 +119,34 @@ def display_matches(matches, all_comparisons):
     # Create the dropdown options
     dropdown_options = memory_options + dest_cols + ["-- No match --"]
     
-    # Create a set of already matched destination columns
-    matched_dest_cols = {
-        match['dest_column'] for match in st.session_state.edited_matches 
-        if match['dest_column'] != "NO_MATCH"
-    }
-    
+    # Create a set of already matched destination columns for the current row
+    def get_current_matched_cols(current_index):
+        return {
+            match['dest_column'] for idx, match in enumerate(st.session_state.edited_matches) 
+            if match['dest_column'] != "NO_MATCH" and idx != current_index
+        }
+
     # Now display the matches
     for i, match in enumerate(st.session_state.edited_matches):
-        col1, col2, col3, col4, col5, col6 = st.columns([3, 3, 2, 1, 1, 1])  # Added an extra column for No Match button
+        col1, col2, col3, col4, col5, col6 = st.columns([3, 3, 2, 1, 1, 1])
         
         with col1:
             st.text(f"{match['source_column']} ({match['source_expanded']})")
         
         with col2:
             if st.session_state.editing_state.get(i, False):
+                # Get currently matched columns excluding the current row
+                matched_dest_cols = get_current_matched_cols(i)
+                
                 # Set the correct default selection
                 if match['dest_column'] == "NO_MATCH":
-                    selected_index = len(dropdown_options) - 1  # Index of "-- No match --"
+                    selected_index = len(dropdown_options) - 1
                 else:
                     try:
                         selected_index = dropdown_options.index(match['dest_column'])
                     except ValueError:
-                        selected_index = 0  # Default to first option if not found
-                
+                        selected_index = 0
+
                 # Create the dropdown
                 selected_dest = st.selectbox(
                     "Select destination column",
@@ -150,49 +154,43 @@ def display_matches(matches, all_comparisons):
                     index=selected_index,
                     key=f"edit_dropdown_{i}"
                 )
+
+                # Clean the selected destination value
+                clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
                 
-                # Check for duplicate matches right after selection
-                if selected_dest != "-- No match --":
-                    # Remove "(from memory)" suffix if present
-                    clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
-                    
-                    # Check if this destination column is already matched
-                    if clean_dest in matched_dest_cols:
-                        current_match = next(
-                            match for match in st.session_state.edited_matches 
-                            if match['dest_column'] == clean_dest
-                        )
-                        st.warning(f"""
-                            ⚠️ Warning: Column `{clean_dest}` is already matched to source column `{current_match['source_column']}`.
-                            Matching multiple source columns to the same destination column is not allowed.
-                            Please choose a different destination column or use "No match" if there's no appropriate match.
-                            """)
-                        # Don't update the match
-                        continue
-                
-                # Update the match after duplicate check
-                if selected_dest == "-- No match --":
-                    st.session_state.edited_matches[i]['dest_column'] = "NO_MATCH"
-                    st.session_state.edited_matches[i]['dest_expanded'] = "NO_MATCH"
-                    st.session_state.edited_matches[i]['similarity_score'] = 0.0
+                # Check for duplicate matches
+                if selected_dest != "-- No match --" and clean_dest in matched_dest_cols:
+                    # Show warning but don't disrupt the flow
+                    st.warning(f"""
+                        ⚠️ Warning: Column `{clean_dest}` is already matched to another source column.
+                        Matching multiple source columns to the same destination column is not allowed.
+                        Please choose a different destination column or use "No match".
+                    """)
+                    # Don't update the match but allow the user to make another selection
                 else:
-                    st.session_state.edited_matches[i]['dest_column'] = selected_dest
-                    
-                    # Try to get the expanded name
-                    try:
-                        if 'dest_expanded' in st.session_state and 'dest_df' in st.session_state:
-                            dest_idx = st.session_state.dest_df.columns.get_loc(selected_dest)
-                            if dest_idx < len(st.session_state.dest_expanded):
-                                st.session_state.edited_matches[i]['dest_expanded'] = st.session_state.dest_expanded[dest_idx]
+                    # Update the match when there's no duplicate or it's "No match"
+                    if selected_dest == "-- No match --":
+                        st.session_state.edited_matches[i]['dest_column'] = "NO_MATCH"
+                        st.session_state.edited_matches[i]['dest_expanded'] = "NO_MATCH"
+                        st.session_state.edited_matches[i]['similarity_score'] = 0.0
+                    else:
+                        st.session_state.edited_matches[i]['dest_column'] = selected_dest
+                        
+                        # Try to get the expanded name
+                        try:
+                            if 'dest_expanded' in st.session_state and 'dest_df' in st.session_state:
+                                dest_idx = st.session_state.dest_df.columns.get_loc(clean_dest)
+                                if dest_idx < len(st.session_state.dest_expanded):
+                                    st.session_state.edited_matches[i]['dest_expanded'] = st.session_state.dest_expanded[dest_idx]
+                                else:
+                                    st.session_state.edited_matches[i]['dest_expanded'] = clean_dest
                             else:
-                                st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                        else:
-                            st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                    except Exception:
-                        st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                    
-                    # Set high similarity for manually selected
-                    st.session_state.edited_matches[i]['similarity_score'] = 1.0
+                                st.session_state.edited_matches[i]['dest_expanded'] = clean_dest
+                        except Exception:
+                            st.session_state.edited_matches[i]['dest_expanded'] = clean_dest
+                        
+                        # Set high similarity for manually selected
+                        st.session_state.edited_matches[i]['similarity_score'] = 1.0
             else:
                 # Display the current match
                 if match['dest_column'] == "NO_MATCH":
