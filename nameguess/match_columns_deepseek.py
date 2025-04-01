@@ -6,7 +6,6 @@ import requests
 import time
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
-from abbreviation_rag_query import AbbreviationRAG
 from column_memory import ColumnMatchMemory
 import streamlit as st
 from simple_medical_rag import SimpleMedicalRAG
