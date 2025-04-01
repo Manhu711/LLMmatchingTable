@@ -490,18 +490,23 @@ def main():
             st.success("✅ Medical Abbreviation System (Simplified): Active")
         else:
             st.warning("⚠️ Medical Abbreviation System: Not Available")
-        
-        # Add Reset button
-        if st.button("Reset App"):
-            reset_session_state()
-            st.rerun()
-        
-        # Memory Management Section
+            st.info("To enable medical abbreviation support, ensure the simplified medical abbreviations dictionary is present.")
+
+        # Add deployment info
+        is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
+        if is_cloud:
+            st.sidebar.success("🌐 Running on Streamlit Cloud")
+        else:
+            st.sidebar.info("💻 Running Locally")
+
+        # Simple memory settings
         st.markdown("---")
-        st.header("Memory Management")
-        use_memory = st.checkbox("Use column matching memory", value=True)
-        save_matches = st.checkbox("Save new matches to memory", value=True)
-        
+        st.header("Settings")
+        use_memory = st.checkbox("Use column matching memory", value=True, 
+                               help="If enabled, the app will remember previous successful matches.")
+        save_matches = st.checkbox("Save new matches to memory", value=True,
+                               help="If enabled, new high-confidence matches will be saved.")
+
         if use_memory:
             st.info("Column matching memory is enabled.")
             
@@ -520,28 +525,6 @@ def main():
                         st.info("No matches stored in memory yet.")
                 except Exception as e:
                     st.error(f"Error accessing memory: {str(e)}")
-            
-            # Clear Memory section
-            with st.expander("⚠️ Clear Matching Memory"):
-                st.warning("This will delete all saved column matches. This action cannot be undone.")
-                if st.button("Clear All Matches"):
-                    try:
-                        success, message = clear_column_memory()
-                        if success:
-                            st.success("✅ Memory cleared successfully!")
-                            reset_session_state()
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to clear memory: {message}")
-                    except Exception as e:
-                        st.error(f"Error clearing memory: {str(e)}")
-    
-    # Add deployment info
-    is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
-    if is_cloud:
-        st.sidebar.success("🌐 Running on Streamlit Cloud")
-    else:
-        st.sidebar.info("💻 Running Locally")
     
     # Add brief introduction with better styling
     st.markdown("""
