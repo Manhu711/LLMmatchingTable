@@ -10,7 +10,6 @@ MEMORY_FILE_PATH = os.path.join(os.path.expanduser("~"), ".column_matcher", "mem
 if not os.environ.get("DEEPSEEK_API_KEY"):
     try:
         os.environ["DEEPSEEK_API_KEY"] = st.secrets["DEEPSEEK_API_KEY"]
-        st.write("Debug: API key loaded from secrets")
     except Exception as e:
         st.error("DeepSeek API key not found. Please configure it in your environment or Streamlit secrets.")
         st.exception(e)
@@ -464,27 +463,21 @@ def main():
     try:
         st.title("LLM Based CSV Table Matcher")
         
-        # Debug logging
-        st.write("Debug: Starting application")
-        
         # Add RAG status indicator in sidebar
         with st.sidebar:
             st.header("System Status")
             rag_available = init_rag()
             if rag_available:
-                st.success("✅ Medical Abbreviation System (Simplified): Active")
+                st.success("✅ Medical Abbreviation RAG System: Active")
             else:
-                st.warning("⚠️ Medical Abbreviation System: Not Available")
-                st.info("To enable medical abbreviation support, ensure the simplified medical abbreviations dictionary is present.")
+                st.warning("⚠️ Medical Abbreviation RAG System: Not Available")
+                st.info("To enable medical abbreviation support, ensure the medical abbreviations dictionary is present.")
         
-        st.write("Debug: Sidebar initialized")
-        
-        # Add deployment info
-        is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
-        if is_cloud:
+        # Update deployment info check
+        if st.runtime.exists():  # Check if running in Streamlit Cloud
             st.sidebar.success("🌐 Running on Streamlit Cloud")
         else:
-            st.sidebar.info("💻 Running Locally")
+            st.sidebar.info("💻 Running on Local Server")
         
         # Add brief introduction with better styling
         st.markdown("""
