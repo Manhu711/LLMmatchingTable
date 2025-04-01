@@ -22,18 +22,19 @@ import re
 st.set_page_config(page_title="Column Matcher", layout="wide")
 
 def create_aligned_tables(source_cols, source_expanded, dest_cols, dest_expanded):
-    """Create two aligned tables showing original and expanded column names with improved styling"""
-    # Create DataFrames for both tables
+    """Create two aligned tables showing original and expanded column names"""
+    # Create DataFrames for both tables with unique indices
     source_df = pd.DataFrame({
         'Original Column': source_cols,
         'Expanded Name': source_expanded
-    })
+    }).drop_duplicates()
+    
     dest_df = pd.DataFrame({
         'Original Column': dest_cols,
         'Expanded Name': dest_expanded
-    })
+    }).drop_duplicates()
     
-    # Apply better styling
+    # Apply styling
     def style_df(df):
         return df.style.set_properties(**{
             'background-color': '#f0f2f6',
@@ -60,11 +61,6 @@ def create_aligned_tables(source_cols, source_expanded, dest_cols, dest_expanded
                 ('background-color', '#f8f9fa')
             ]}
         ])
-    
-    # Ensure both DataFrames have the same number of rows
-    max_rows = max(len(source_df), len(dest_df))
-    source_df = source_df.reindex(range(max_rows), fill_value='')
-    dest_df = dest_df.reindex(range(max_rows), fill_value='')
     
     return style_df(source_df), style_df(dest_df)
 
@@ -585,7 +581,31 @@ def main():
                         st.session_state.source_df,
                         st.session_state.edited_matches
                     )
-                    st.success("Matching confirmed! Your source data has been transformed.")
+                    
+                    # Save matches to memory immediately after confirmation
+                    if use_memory and save_matches:
+                        try:
+                            from column_memory import ColumnMatchMemory
+                            memory = ColumnMatchMemory(MEMORY_FILE_PATH)
+                            saved_count = 0
+                            
+                            for match in st.session_state.edited_matches:
+                                source_col = match["source_column"]
+                                dest_col = match["dest_column"]
+                                # Save all confirmed matches except NO_MATCH
+                                if dest_col != "NO_MATCH":
+                                    memory.add_match(source_col, dest_col)
+                                    saved_count += 1
+                            
+                            if saved_count > 0:
+                                st.success(f"Matching confirmed! {saved_count} matches saved to memory.")
+                            else:
+                                st.success("Matching confirmed! No new matches to save.")
+                        except Exception as e:
+                            st.warning(f"Could not save matches to memory: {str(e)}")
+                            st.success("Matching confirmed! Your source data has been transformed.")
+                    else:
+                        st.success("Matching confirmed! Your source data has been transformed.")
                 
                 # Display matched file if confirmed
                 if st.session_state.matching_confirmed:
@@ -634,45 +654,60 @@ def main():
                         # Then show the preview with highlighted columns
                         st.markdown("### Preview of Matched File")
                         if hasattr(st.session_state, 'column_operations'):
-                            # Get lists of columns for highlighting
-                            kept_columns = st.session_state.column_operations["kept_source_columns"]
-                            missing_columns = st.session_state.column_operations["added_missing_columns"]
-                            matched_columns = list(st.session_state.column_operations["matched_columns"].values())
+                            try:
+                                # Get lists of columns for highlighting
+                                kept_columns = st.session_state.column_operations["kept_source_columns"]
+                                missing_columns = st.session_state.column_operations["added_missing_columns"]
+                                matched_columns = list(st.session_state.column_operations["matched_columns"].values())
+                                
+                                # Check for duplicate columns
+                                if st.session_state.matched_df.columns.duplicated().any():
+                                    st.warning("Duplicate column names detected. Displaying without highlighting.")
+                                    st.dataframe(st.session_state.matched_df.head(10), use_container_width=True)
+                                else:
+                                    # Display the styled dataframe
+                                    def highlight_columns(df):
+                                        if df.index.duplicated().any() or df.columns.duplicated().any():
+                                            # If there are duplicate indices or columns, return unstyled
+                                            return pd.DataFrame('', index=df.index, columns=df.columns)
+                                        
+                                        styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                                        
+                                        try:
+                                            # Highlight matched columns (light green)
+                                            for col in matched_columns:
+                                                if col in df.columns:
+                                                    styles[col] = 'background-color: #e6ffe6'
+                                            
+                                            # Highlight kept original columns (light yellow)
+                                            for col in kept_columns:
+                                                if col in df.columns:
+                                                    styles[col] = 'background-color: #ffffcc'
+                                            
+                                            # Highlight added missing columns (light red)
+                                            for col in missing_columns:
+                                                if col in df.columns:
+                                                    styles[col] = 'background-color: #ffcccc'
+                                        except Exception as e:
+                                            st.warning(f"Could not apply highlighting: {str(e)}")
+                                        
+                                        return styles
 
-                            # Create a styled dataframe
-                            def highlight_columns(df):
-                                styles = pd.DataFrame('', index=df.index, columns=df.columns)
-                                
-                                # Highlight matched columns (light green)
-                                for col in matched_columns:
-                                    if col in df.columns:
-                                        styles[col] = 'background-color: #e6ffe6'
-                                
-                                # Highlight kept original columns (light yellow)
-                                for col in kept_columns:
-                                    if col in df.columns:
-                                        styles[col] = 'background-color: #ffffcc'
-                                
-                                # Highlight added missing columns (light red)
-                                for col in missing_columns:
-                                    if col in df.columns:
-                                        styles[col] = 'background-color: #ffcccc'
-                                
-                                return styles
+                                    # Add a legend for the colors
+                                    st.markdown("""
+                                    **Color Legend:**
+                                    - <span style='background-color: #e6ffe6; padding: 2px 6px;'>Matched Columns</span>
+                                    - <span style='background-color: #ffffcc; padding: 2px 6px;'>Kept Original Columns</span>
+                                    - <span style='background-color: #ffcccc; padding: 2px 6px;'>Added Missing Columns</span>
+                                    """, unsafe_allow_html=True)
 
-                            # Add a legend for the colors
-                            st.markdown("""
-                            **Color Legend:**
-                            - <span style='background-color: #e6ffe6; padding: 2px 6px;'>Matched Columns</span>
-                            - <span style='background-color: #ffffcc; padding: 2px 6px;'>Kept Original Columns</span>
-                            - <span style='background-color: #ffcccc; padding: 2px 6px;'>Added Missing Columns</span>
-                            """, unsafe_allow_html=True)
-
-                            # Display the styled dataframe
-                            st.dataframe(
-                                st.session_state.matched_df.head(10).style.apply(highlight_columns, axis=None),
-                                use_container_width=True
-                            )
+                                    # Display the styled dataframe
+                                    styled_df = st.session_state.matched_df.head(10).style.apply(highlight_columns, axis=None)
+                                    st.dataframe(styled_df, use_container_width=True)
+                            except Exception as e:
+                                st.error(f"Error displaying preview: {str(e)}")
+                                # Fallback to unstyled display
+                                st.dataframe(st.session_state.matched_df.head(10), use_container_width=True)
                         else:
                             st.error("No matched data available. Please confirm the matching first.")
 
