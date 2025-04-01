@@ -581,6 +581,9 @@ def main():
             st.info("Column matching memory is enabled.")
             
             # Memory management section
+            st.markdown("### Memory Management")
+            
+            # View Memory Contents button
             if st.button("View Memory Contents"):
                 try:
                     from column_memory import ColumnMatchMemory
@@ -595,6 +598,25 @@ def main():
                         st.info("No matches stored in memory yet.")
                 except Exception as e:
                     st.error(f"Error accessing memory: {str(e)}")
+            
+            # Add Clear Memory section with password protection
+            st.markdown("### Clear Memory")
+            admin_password = st.text_input("Admin Password", type="password")
+            if st.button("Clear Matching Memory"):
+                if admin_password == "admin123":  # You can change this password
+                    try:
+                        success, message = clear_column_memory()
+                        if success:
+                            st.success("✅ Memory cleared successfully!")
+                            # Reset session state to ensure clean slate
+                            reset_session_state()
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to clear memory: {message}")
+                    except Exception as e:
+                        st.error(f"Error clearing memory: {str(e)}")
+                else:
+                    st.error("❌ Incorrect password")
     
     if source_file and dest_file:
         try:
