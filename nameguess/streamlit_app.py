@@ -589,105 +589,113 @@ def main():
                 
                 # Display matched file if confirmed
                 if st.session_state.matching_confirmed:
-                    # First, display the column operations summary
-                    st.markdown("### Column Operations Summary")
-                    with st.expander("View Details", expanded=True):
+                    if st.session_state.matched_df is not None:  # Add this check
+                        # First, display the column operations summary
+                        st.markdown("### Column Operations Summary")
+                        with st.expander("View Details", expanded=True):
+                            if hasattr(st.session_state, 'column_operations'):
+                                # Show matched columns
+                                if st.session_state.column_operations["matched_columns"]:
+                                    st.markdown("#### ✅ Matched and Renamed Columns")
+                                    for src, dest in st.session_state.column_operations["matched_columns"].items():
+                                        st.markdown(f"- `{src}` → `{dest}`")
+                                else:
+                                    st.info("No columns were matched/renamed.")
+
+                                # Show kept source columns
+                                if st.session_state.column_operations["kept_source_columns"]:
+                                    st.markdown("#### 🔄 Kept Original Columns (No Match)")
+                                    for col in st.session_state.column_operations["kept_source_columns"]:
+                                        st.markdown(f"- `{col}`")
+                                else:
+                                    st.info("No original columns were kept unchanged.")
+
+                                # Show added missing columns
+                                if st.session_state.column_operations["added_missing_columns"]:
+                                    st.markdown("#### ➕ Added Missing Columns (Filled with 'MISSING')")
+                                    for col in st.session_state.column_operations["added_missing_columns"]:
+                                        st.markdown(f"- `{col}`")
+                                else:
+                                    st.info("No missing columns were added.")
+
+                                # Add a summary of the changes
+                                st.markdown("---")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Matched Columns", 
+                                            len(st.session_state.column_operations["matched_columns"]))
+                                with col2:
+                                    st.metric("Kept Original", 
+                                            len(st.session_state.column_operations["kept_source_columns"]))
+                                with col3:
+                                    st.metric("Added Missing", 
+                                            len(st.session_state.column_operations["added_missing_columns"]))
+
+                        # Then show the preview with highlighted columns
+                        st.markdown("### Preview of Matched File")
                         if hasattr(st.session_state, 'column_operations'):
-                            # Show matched columns
-                            if st.session_state.column_operations["matched_columns"]:
-                                st.markdown("#### ✅ Matched and Renamed Columns")
-                                for src, dest in st.session_state.column_operations["matched_columns"].items():
-                                    st.markdown(f"- `{src}` → `{dest}`")
+                            # Get lists of columns for highlighting
+                            kept_columns = st.session_state.column_operations["kept_source_columns"]
+                            missing_columns = st.session_state.column_operations["added_missing_columns"]
+                            matched_columns = list(st.session_state.column_operations["matched_columns"].values())
+
+                            # Create a styled dataframe
+                            def highlight_columns(df):
+                                styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                                
+                                # Highlight matched columns (light green)
+                                for col in matched_columns:
+                                    if col in df.columns:
+                                        styles[col] = 'background-color: #e6ffe6'
+                                
+                                # Highlight kept original columns (light yellow)
+                                for col in kept_columns:
+                                    if col in df.columns:
+                                        styles[col] = 'background-color: #ffffcc'
+                                
+                                # Highlight added missing columns (light red)
+                                for col in missing_columns:
+                                    if col in df.columns:
+                                        styles[col] = 'background-color: #ffcccc'
+                                
+                                return styles
+
+                            # Add a legend for the colors
+                            st.markdown("""
+                            **Color Legend:**
+                            - <span style='background-color: #e6ffe6; padding: 2px 6px;'>Matched Columns</span>
+                            - <span style='background-color: #ffffcc; padding: 2px 6px;'>Kept Original Columns</span>
+                            - <span style='background-color: #ffcccc; padding: 2px 6px;'>Added Missing Columns</span>
+                            """, unsafe_allow_html=True)
+
+                            # Display the styled dataframe
+                            st.dataframe(
+                                st.session_state.matched_df.head(10).style.apply(highlight_columns, axis=None),
+                                use_container_width=True
+                            )
+                        else:
+                            st.error("No matched data available. Please confirm the matching first.")
+
+                        # Download section - Add error handling
+                        try:
+                            st.markdown("### Download Transformed Data")
+                            default_filename = f"{os.path.splitext(st.session_state.source_filename)[0]}_matched.csv"
+                            
+                            # Verify data is available before creating download button
+                            if not st.session_state.matched_df.empty:
+                                st.download_button(
+                                    label="Download Matched File",
+                                    data=st.session_state.matched_df.to_csv(index=False).encode('utf-8'),
+                                    file_name=default_filename,
+                                    mime="text/csv",
+                                    key='download-matched-file'
+                                )
                             else:
-                                st.info("No columns were matched/renamed.")
-
-                            # Show kept source columns
-                            if st.session_state.column_operations["kept_source_columns"]:
-                                st.markdown("#### 🔄 Kept Original Columns (No Match)")
-                                for col in st.session_state.column_operations["kept_source_columns"]:
-                                    st.markdown(f"- `{col}`")
-                            else:
-                                st.info("No original columns were kept unchanged.")
-
-                            # Show added missing columns
-                            if st.session_state.column_operations["added_missing_columns"]:
-                                st.markdown("#### ➕ Added Missing Columns (Filled with 'MISSING')")
-                                for col in st.session_state.column_operations["added_missing_columns"]:
-                                    st.markdown(f"- `{col}`")
-                            else:
-                                st.info("No missing columns were added.")
-
-                            # Add a summary of the changes
-                            st.markdown("---")
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Matched Columns", 
-                                        len(st.session_state.column_operations["matched_columns"]))
-                            with col2:
-                                st.metric("Kept Original", 
-                                        len(st.session_state.column_operations["kept_source_columns"]))
-                            with col3:
-                                st.metric("Added Missing", 
-                                        len(st.session_state.column_operations["added_missing_columns"]))
-
-                    # Then show the preview with highlighted columns
-                    st.markdown("### Preview of Matched File")
-                    if hasattr(st.session_state, 'column_operations'):
-                        # Get lists of columns for highlighting
-                        kept_columns = st.session_state.column_operations["kept_source_columns"]
-                        missing_columns = st.session_state.column_operations["added_missing_columns"]
-                        matched_columns = list(st.session_state.column_operations["matched_columns"].values())
-
-                        # Create a styled dataframe
-                        def highlight_columns(df):
-                            styles = pd.DataFrame('', index=df.index, columns=df.columns)
-                            
-                            # Highlight matched columns (light green)
-                            for col in matched_columns:
-                                if col in df.columns:
-                                    styles[col] = 'background-color: #e6ffe6'
-                            
-                            # Highlight kept original columns (light yellow)
-                            for col in kept_columns:
-                                if col in df.columns:
-                                    styles[col] = 'background-color: #ffffcc'
-                            
-                            # Highlight added missing columns (light red)
-                            for col in missing_columns:
-                                if col in df.columns:
-                                    styles[col] = 'background-color: #ffcccc'
-                            
-                            return styles
-
-                        # Add a legend for the colors
-                        st.markdown("""
-                        **Color Legend:**
-                        - <span style='background-color: #e6ffe6; padding: 2px 6px;'>Matched Columns</span>
-                        - <span style='background-color: #ffffcc; padding: 2px 6px;'>Kept Original Columns</span>
-                        - <span style='background-color: #ffcccc; padding: 2px 6px;'>Added Missing Columns</span>
-                        """, unsafe_allow_html=True)
-
-                        # Display the styled dataframe
-                        st.dataframe(
-                            st.session_state.matched_df.head(10).style.apply(highlight_columns, axis=None),
-                            use_container_width=True
-                        )
+                                st.warning("No data available for download.")
+                        except Exception as e:
+                            st.error(f"Error preparing download: {str(e)}")
                     else:
-                        # Basic display without styling
-                        st.dataframe(st.session_state.matched_df.head(10), hide_index=True)
-                    
-                    # Download section
-                    st.markdown("### Download Transformed Data")
-                    default_filename = f"{os.path.splitext(st.session_state.source_filename)[0]}_matched.csv"
-                    
-                    # Download button
-                st.download_button(
-                        label="Download Matched File",
-                        data=st.session_state.matched_df.to_csv(index=False).encode('utf-8'),
-                        file_name=default_filename,
-                        mime="text/csv",
-                        key='download-matched-file'
-                )
+                        st.error("No matched data available. Please confirm the matching first.")
                 
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")

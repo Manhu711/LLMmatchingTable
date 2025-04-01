@@ -3,4 +3,5 @@ pandas
 sentence-transformers
 requests
 python-dotenv
-numpy 
+numpy
+torch>=2.0.0 
