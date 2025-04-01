@@ -151,7 +151,26 @@ def display_matches(matches, all_comparisons):
                     key=f"edit_dropdown_{i}"
                 )
                 
-                # Update the match immediately when the dropdown value changes
+                # Check for duplicate matches right after selection
+                if selected_dest != "-- No match --":
+                    # Remove "(from memory)" suffix if present
+                    clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
+                    
+                    # Check if this destination column is already matched
+                    if clean_dest in matched_dest_cols:
+                        current_match = next(
+                            match for match in st.session_state.edited_matches 
+                            if match['dest_column'] == clean_dest
+                        )
+                        st.warning(f"""
+                            ⚠️ Warning: Column `{clean_dest}` is already matched to source column `{current_match['source_column']}`.
+                            Matching multiple source columns to the same destination column is not allowed.
+                            Please choose a different destination column or use "No match" if there's no appropriate match.
+                            """)
+                        # Don't update the match
+                        continue
+                
+                # Update the match after duplicate check
                 if selected_dest == "-- No match --":
                     st.session_state.edited_matches[i]['dest_column'] = "NO_MATCH"
                     st.session_state.edited_matches[i]['dest_expanded'] = "NO_MATCH"
@@ -212,25 +231,6 @@ def display_matches(matches, all_comparisons):
             # If already NO_MATCH, show a disabled button or indicator
             elif not st.session_state.editing_state.get(i, False) and match['dest_column'] == "NO_MATCH":
                 st.markdown("✓ No Match")
-
-        # In the column display loop, after selected_dest is chosen:
-        if selected_dest != "-- No match --":
-            # Remove "(from memory)" suffix if present
-            clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
-            
-            # Check if this destination column is already matched
-            if clean_dest in matched_dest_cols:
-                current_match = next(
-                    match for match in st.session_state.edited_matches 
-                    if match['dest_column'] == clean_dest
-                )
-                st.warning(f"""
-                    ⚠️ Warning: Column `{clean_dest}` is already matched to source column `{current_match['source_column']}`.
-                    Matching multiple source columns to the same destination column is not allowed.
-                    Please choose a different destination column or use "No match" if there's no appropriate match.
-                    """)
-                # Don't update the match
-                continue
 
 @st.cache_resource
 def load_semantic_model():
