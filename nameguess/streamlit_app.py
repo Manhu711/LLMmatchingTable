@@ -459,10 +459,30 @@ def reset_session_state():
         if key not in keys_to_keep:
             del st.session_state[key]
 
+def validate_csv_file(file, file_type="source"):
+    """Validate uploaded CSV file"""
+    try:
+        # Try to read the first few rows to validate
+        df = pd.read_csv(file)
+        
+        # Check if file has any columns
+        if len(df.columns) == 0:
+            return False, f"The {file_type} file contains no columns."
+        
+        # Check if file has any data
+        if len(df) == 0:
+            return False, f"The {file_type} file contains no data."
+        
+        return True, df
+    except pd.errors.EmptyDataError:
+        return False, f"The {file_type} file is empty or invalid."
+    except Exception as e:
+        return False, f"Error reading {file_type} file: {str(e)}"
+
 def main():
     st.title("LLM Based CSV Table Matcher")
     
-    # Add RAG status indicator in sidebar
+    # Add RAG status indicator and memory management in sidebar
     with st.sidebar:
         st.header("System Status")
         rag_available = init_rag()
@@ -470,7 +490,51 @@ def main():
             st.success("✅ Medical Abbreviation System (Simplified): Active")
         else:
             st.warning("⚠️ Medical Abbreviation System: Not Available")
-            st.info("To enable medical abbreviation support, ensure the simplified medical abbreviations dictionary is present.")
+        
+        # Add Reset button
+        if st.button("Reset App"):
+            reset_session_state()
+            st.rerun()
+        
+        # Memory Management Section
+        st.markdown("---")
+        st.header("Memory Management")
+        use_memory = st.checkbox("Use column matching memory", value=True)
+        save_matches = st.checkbox("Save new matches to memory", value=True)
+        
+        if use_memory:
+            st.info("Column matching memory is enabled.")
+            
+            # View Memory Contents button
+            if st.button("View Memory Contents"):
+                try:
+                    from column_memory import ColumnMatchMemory
+                    memory = ColumnMatchMemory(MEMORY_FILE_PATH)
+                    matches = memory.get_all_matches()
+                    
+                    if matches:
+                        st.write("### Stored Matches")
+                        for src, dest in matches.items():
+                            st.write(f"- {src} → {dest}")
+                    else:
+                        st.info("No matches stored in memory yet.")
+                except Exception as e:
+                    st.error(f"Error accessing memory: {str(e)}")
+            
+            # Clear Memory section
+            with st.expander("⚠️ Clear Matching Memory"):
+                st.warning("This will delete all saved column matches. This action cannot be undone.")
+                if st.button("Clear All Matches"):
+                    try:
+                        success, message = clear_column_memory()
+                        if success:
+                            st.success("✅ Memory cleared successfully!")
+                            reset_session_state()
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to clear memory: {message}")
+                    except Exception as e:
+                        st.error(f"Error clearing memory: {str(e)}")
     
     # Add deployment info
     is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
@@ -518,36 +582,32 @@ def main():
     with the target column structure.
     """)
     
-    # Add Reset button in the sidebar
-    with st.sidebar:
-        if st.button("Reset App"):
-            reset_session_state()
-            st.rerun()
-    
     col1, col2 = st.columns(2)
     with col1:
         source_file = st.file_uploader("Upload Source CSV", type=['csv'], key='source_file_uploader')
         if source_file is not None:
-            try:
-                source_df = pd.read_csv(source_file)
+            valid, result = validate_csv_file(source_file, "source")
+            if valid:
+                source_df = result
                 st.session_state.source_filename = source_file.name
                 st.session_state.source_df = source_df
                 st.session_state.matching_confirmed = False
-            except Exception as e:
-                st.error(f"Error reading source file: {str(e)}")
-                reset_session_state()
-                st.rerun()
+                st.success(f"Source file loaded successfully with {len(source_df.columns)} columns.")
+            else:
+                st.error(result)
+                source_file = None
     
     with col2:
         dest_file = st.file_uploader("Upload Destination CSV", type=['csv'], key='dest_file_uploader')
         if dest_file is not None:
-            try:
-                dest_df = pd.read_csv(dest_file)
+            valid, result = validate_csv_file(dest_file, "destination")
+            if valid:
+                dest_df = result
                 st.session_state.dest_df = dest_df
-            except Exception as e:
-                st.error(f"Error reading destination file: {str(e)}")
-                reset_session_state()
-                st.rerun()
+                st.success(f"Destination file loaded successfully with {len(dest_df.columns)} columns.")
+            else:
+                st.error(result)
+                dest_file = None
     
     # Only proceed if both files are uploaded successfully
     if source_file is None or dest_file is None:
@@ -565,52 +625,6 @@ def main():
         "Context", 
         placeholder="e.g., medical data, clinical study, etc."
     )
-    
-    # In the sidebar
-    with st.sidebar:
-        st.header("App Settings")
-        use_memory = st.checkbox("Use column matching memory", value=True)
-        save_matches = st.checkbox("Save new matches to memory", value=True)
-        
-        if use_memory:
-            st.info("Column matching memory is enabled.")
-            
-            # Memory management section
-            st.markdown("### Memory Management")
-            
-            # View Memory Contents button
-            if st.button("View Memory Contents"):
-                try:
-                    from column_memory import ColumnMatchMemory
-                    memory = ColumnMatchMemory(MEMORY_FILE_PATH)
-                    matches = memory.get_all_matches()
-                    
-                    if matches:
-                        st.write("### Stored Matches")
-                        for src, dest in matches.items():
-                            st.write(f"- {src} → {dest}")
-                    else:
-                        st.info("No matches stored in memory yet.")
-                except Exception as e:
-                    st.error(f"Error accessing memory: {str(e)}")
-            
-            # Add Clear Memory section
-            st.markdown("---")
-            st.markdown("### Clear Memory")
-            with st.expander("⚠️ Clear Matching Memory"):
-                st.warning("This will delete all saved column matches. This action cannot be undone.")
-                if st.button("Clear All Matches", key="clear_memory_button"):
-                    try:
-                        success, message = clear_column_memory()
-                        if success:
-                            st.success("✅ Memory cleared successfully!")
-                            # Reset session state to ensure clean slate
-                            reset_session_state()
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to clear memory: {message}")
-                    except Exception as e:
-                        st.error(f"Error clearing memory: {str(e)}")
     
     if source_file and dest_file:
         try:
