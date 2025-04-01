@@ -457,6 +457,13 @@ def validate_matches(matches):
     
     return duplicates
 
+def reset_session_state():
+    """Reset all session state variables"""
+    keys_to_keep = ['models']  # Keep cached models to avoid reloading
+    for key in list(st.session_state.keys()):
+        if key not in keys_to_keep:
+            del st.session_state[key]
+
 def main():
     st.title("LLM Based CSV Table Matcher")
     
@@ -516,14 +523,41 @@ def main():
     with the target column structure.
     """)
     
+    # Add Reset button in the sidebar
+    with st.sidebar:
+        if st.button("Reset App"):
+            reset_session_state()
+            st.rerun()
+    
     col1, col2 = st.columns(2)
     with col1:
-        source_file = st.file_uploader("Upload Source CSV", type=['csv'])
-        if source_file is not None and st.session_state.source_filename != source_file.name:
-            st.session_state.source_filename = source_file.name
-            st.session_state.matching_confirmed = False
+        source_file = st.file_uploader("Upload Source CSV", type=['csv'], key='source_file_uploader')
+        if source_file is not None:
+            try:
+                source_df = pd.read_csv(source_file)
+                st.session_state.source_filename = source_file.name
+                st.session_state.source_df = source_df
+                st.session_state.matching_confirmed = False
+            except Exception as e:
+                st.error(f"Error reading source file: {str(e)}")
+                reset_session_state()
+                st.rerun()
+    
     with col2:
-        dest_file = st.file_uploader("Upload Destination CSV", type=['csv'])
+        dest_file = st.file_uploader("Upload Destination CSV", type=['csv'], key='dest_file_uploader')
+        if dest_file is not None:
+            try:
+                dest_df = pd.read_csv(dest_file)
+                st.session_state.dest_df = dest_df
+            except Exception as e:
+                st.error(f"Error reading destination file: {str(e)}")
+                reset_session_state()
+                st.rerun()
+    
+    # Only proceed if both files are uploaded successfully
+    if source_file is None or dest_file is None:
+        st.info("Please upload both source and destination CSV files to begin.")
+        return
     
     # Context input with explanation
     st.markdown("### Step 2: Provide Context (Optional)")
