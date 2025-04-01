@@ -461,6 +461,9 @@ def validate_matches(matches):
 
 def main():
     try:
+        # Clear any previous messages
+        st.empty()
+        
         st.title("LLM Based CSV Table Matcher")
         
         # Add RAG status indicator in sidebar
@@ -468,16 +471,13 @@ def main():
             st.header("System Status")
             rag_available = init_rag()
             if rag_available:
-                st.success("✅ Medical Abbreviation RAG System: Active")
+                st.success("✅ Medical Abbreviation RAG System: Active")  # Updated text
             else:
-                st.warning("⚠️ Medical Abbreviation RAG System: Not Available")
+                st.warning("⚠️ Medical Abbreviation RAG System: Not Available")  # Updated text
                 st.info("To enable medical abbreviation support, ensure the medical abbreviations dictionary is present.")
-        
-        # Update deployment info check
-        if st.runtime.exists():  # Check if running in Streamlit Cloud
-            st.sidebar.success("🌐 Running on Streamlit Cloud")
-        else:
-            st.sidebar.info("💻 Running on Local Server")
+            
+            # Update deployment info - remove the check and just show Cloud status
+            st.success("🌐 Running on Cloud")  # Simplified deployment info
         
         # Add brief introduction with better styling
         st.markdown("""
