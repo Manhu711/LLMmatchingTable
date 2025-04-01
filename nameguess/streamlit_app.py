@@ -6,13 +6,14 @@ from pathlib import Path
 # Define the memory file path as a constant to ensure consistency
 MEMORY_FILE_PATH = os.path.join(os.path.expanduser("~"), ".column_matcher", "memory.json")
 
-# Set API key for development
+# Update the API key handling at the start of the file
 if not os.environ.get("DEEPSEEK_API_KEY"):
-    # Try to get from Streamlit secrets
     try:
         os.environ["DEEPSEEK_API_KEY"] = st.secrets["DEEPSEEK_API_KEY"]
-    except:
+        st.write("Debug: API key loaded from secrets")
+    except Exception as e:
         st.error("DeepSeek API key not found. Please configure it in your environment or Streamlit secrets.")
+        st.exception(e)
 
 from match_columns_deepseek import DeepSeekLLM, PromptTemplate, expand_abbreviations, match_columns, init_rag
 from sentence_transformers import SentenceTransformer
@@ -238,11 +239,15 @@ def load_semantic_model():
 
 def load_models():
     """Initialize the required models"""
-    # Set API key directly from environment variable
-    deepseek_model = DeepSeekLLM()  # The model will get the API key from environment
-    prompt_template = PromptTemplate()
-    semantic_model = load_semantic_model()
-    return deepseek_model, prompt_template, semantic_model
+    try:
+        # Set API key directly from environment variable
+        deepseek_model = DeepSeekLLM()  # The model will get the API key from environment
+        prompt_template = PromptTemplate()
+        semantic_model = load_semantic_model()
+        return deepseek_model, prompt_template, semantic_model
+    except Exception as e:
+        st.error(f"Error loading models: {str(e)}")
+        raise
 
 @st.cache_data
 def cached_expansion(abbreviations: list, context: str, verbose: bool = False):
@@ -458,292 +463,297 @@ def validate_matches(matches):
     return duplicates
 
 def main():
-    st.title("LLM Based CSV Table Matcher")
-    
-    # Add RAG status indicator in sidebar
-    with st.sidebar:
-        st.header("System Status")
-        rag_available = init_rag()
-        if rag_available:
-            st.success("✅ Medical Abbreviation System (Simplified): Active")
-        else:
-            st.warning("⚠️ Medical Abbreviation System: Not Available")
-            st.info("To enable medical abbreviation support, ensure the simplified medical abbreviations dictionary is present.")
-    
-    # Add deployment info
-    is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
-    if is_cloud:
-        st.sidebar.success("🌐 Running on Streamlit Cloud")
-    else:
-        st.sidebar.info("💻 Running Locally")
-    
-    # Add brief introduction with better styling
-    st.markdown("""
-    <div style="background-color: #f0f7fb; padding: 1.5rem; border-radius: 0.5rem; border-left: 5px solid #4e7496; margin-bottom: 1.5rem;">
-        <p style="font-size: 1.1rem; line-height: 1.6; color: #1e3a5f; margin: 0;">
-            This app matches your source data table to a destination table format by using Large Language Models (LLMs) 
-            to interpret column names and find semantic matches between tables.
-        </p>
-        <p style="font-size: 1.1rem; line-height: 1.6; color: #1e3a5f; margin-top: 1rem;">
-            The app includes a Medical Abbreviation RAG System that enhances column name interpretation based on a medical abbreviation database 
-            (Grossman Liu, L., et al. A deep database of medical abbreviations and acronyms for natural language processing. 
-            Sci Data 8, 149 (2021). https://doi.org/10.1038/s41597-021-00929-4).
-        </p>
-        <p style="font-size: 1.1rem; line-height: 1.6; color: #1e3a5f; margin-top: 1rem;">
-            The matching memory feature learns from your confirmed column matches, saving them for future use to improve 
-            accuracy and efficiency across similar datasets over time.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Initialize models and RAG
-    if 'models' not in st.session_state:
-        with st.spinner('Loading models...'):
-            st.session_state.models = load_models()
-    
-    # Initialize session state for matched file
-    if 'matched_df' not in st.session_state:
-        st.session_state.matched_df = None
-    if 'matching_confirmed' not in st.session_state:
-        st.session_state.matching_confirmed = False
-    if 'source_filename' not in st.session_state:
-        st.session_state.source_filename = ""
-    
-    # File uploaders section with guidance
-    st.markdown("### Step 1: Upload Your Data")
-    st.markdown("""
-    Upload the source CSV file you want to transform and the destination CSV file 
-    with the target column structure.
-    """)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        source_file = st.file_uploader("Upload Source CSV", type=['csv'])
-        if source_file is not None and st.session_state.source_filename != source_file.name:
-            st.session_state.source_filename = source_file.name
-            st.session_state.matching_confirmed = False
-    with col2:
-        dest_file = st.file_uploader("Upload Destination CSV", type=['csv'])
-    
-    # Context input with explanation
-    st.markdown("### Step 2: Provide Context (Optional)")
-    st.markdown("""
-    Providing context about your data domain helps the AI better interpret column names. 
-    For example, "financial data", "clinical study", "customer records", etc.
-    """)
-    
-    context = st.text_input(
-        "Context", 
-        placeholder="e.g., medical data, clinical study, etc."
-    )
-    
-    # In the sidebar
-    with st.sidebar:
-        st.header("App Settings")
-        use_memory = st.checkbox("Use column matching memory", value=True)
-        save_matches = st.checkbox("Save new matches to memory", value=True)
+    try:
+        st.title("LLM Based CSV Table Matcher")
         
-        if use_memory:
-            st.info("Column matching memory is enabled.")
-            
-            # Memory management section
-            if st.button("View Memory Contents"):
-                try:
-                    from column_memory import ColumnMatchMemory
-                    memory = ColumnMatchMemory(MEMORY_FILE_PATH)
-                    matches = memory.get_all_matches()
-                    
-                    if matches:
-                        st.write("### Stored Matches")
-                        for src, dest in matches.items():
-                            st.write(f"- {src} → {dest}")
-                    else:
-                        st.info("No matches stored in memory yet.")
-                except Exception as e:
-                    st.error(f"Error accessing memory: {str(e)}")
-    
-    if source_file and dest_file:
-        try:
-            # Load DataFrames
-            source_df = pd.read_csv(source_file)
-            dest_df = pd.read_csv(dest_file)
-            
-            # Store in session state
-            st.session_state.source_df = source_df
-            st.session_state.dest_df = dest_df
-            
-            # Process button
-            if st.button("Match Columns"):
+        # Debug logging
+        st.write("Debug: Starting application")
+        
+        # Add RAG status indicator in sidebar
+        with st.sidebar:
+            st.header("System Status")
+            rag_available = init_rag()
+            if rag_available:
+                st.success("✅ Medical Abbreviation System (Simplified): Active")
+            else:
+                st.warning("⚠️ Medical Abbreviation System: Not Available")
+                st.info("To enable medical abbreviation support, ensure the simplified medical abbreviations dictionary is present.")
+        
+        st.write("Debug: Sidebar initialized")
+        
+        # Add deployment info
+        is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
+        if is_cloud:
+            st.sidebar.success("🌐 Running on Streamlit Cloud")
+        else:
+            st.sidebar.info("💻 Running Locally")
+        
+        # Add brief introduction with better styling
+        st.markdown("""
+        <div style="background-color: #f0f7fb; padding: 1.5rem; border-radius: 0.5rem; border-left: 5px solid #4e7496; margin-bottom: 1.5rem;">
+            <p style="font-size: 1.1rem; line-height: 1.6; color: #1e3a5f; margin: 0;">
+                This app matches your source data table to a destination table format by using Large Language Models (LLMs) 
+                to interpret column names and find semantic matches between tables.
+            </p>
+            <p style="font-size: 1.1rem; line-height: 1.6; color: #1e3a5f; margin-top: 1rem;">
+                The app includes a Medical Abbreviation RAG System that enhances column name interpretation based on a medical abbreviation database 
+                (Grossman Liu, L., et al. A deep database of medical abbreviations and acronyms for natural language processing. 
+                Sci Data 8, 149 (2021). https://doi.org/10.1038/s41597-021-00929-4).
+            </p>
+            <p style="font-size: 1.1rem; line-height: 1.6; color: #1e3a5f; margin-top: 1rem;">
+                The matching memory feature learns from your confirmed column matches, saving them for future use to improve 
+                accuracy and efficiency across similar datasets over time.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Initialize models and RAG
+        if 'models' not in st.session_state:
+            try:
+                with st.spinner('Loading models...'):
+                    st.session_state.models = load_models()
+                    st.success("Models loaded successfully")
+            except Exception as e:
+                st.error("Failed to load required models. Please check your configuration.")
+                st.exception(e)
+                return
+        
+        # Initialize session state for matched file
+        if 'matched_df' not in st.session_state:
+            st.session_state.matched_df = None
+        if 'matching_confirmed' not in st.session_state:
+            st.session_state.matching_confirmed = False
+        if 'source_filename' not in st.session_state:
+            st.session_state.source_filename = ""
+        
+        # File uploaders section with guidance
+        st.markdown("### Step 1: Upload Your Data")
+        st.markdown("""
+        Upload the source CSV file you want to transform and the destination CSV file 
+        with the target column structure.
+        """)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            source_file = st.file_uploader("Upload Source CSV", type=['csv'])
+            if source_file is not None and st.session_state.source_filename != source_file.name:
+                st.session_state.source_filename = source_file.name
                 st.session_state.matching_confirmed = False
-                
-                # Process files
-                results = process_files(
-                    source_df, dest_df, context, 
-                    st.session_state.models,
-                    use_memory=use_memory,
-                    save_new_matches=save_matches
-                )
-                
-                source_expanded, dest_expanded, matches, all_comparisons, highest_similarity_pair = results
-                
-                # Store results in session state
-                st.session_state.matches = matches
-                st.session_state.all_comparisons = all_comparisons
-                st.session_state.source_expanded = source_expanded
-                st.session_state.dest_expanded = dest_expanded
-                
-                # Reset edited matches
-                st.session_state.edited_matches = matches.copy()
-                st.session_state.editing_state = {i: False for i in range(len(matches))}
+        with col2:
+            dest_file = st.file_uploader("Upload Destination CSV", type=['csv'])
+        
+        # Context input with explanation
+        st.markdown("### Step 2: Provide Context (Optional)")
+        st.markdown("""
+        Providing context about your data domain helps the AI better interpret column names. 
+        For example, "financial data", "clinical study", "customer records", etc.
+        """)
+        
+        context = st.text_input(
+            "Context", 
+            placeholder="e.g., medical data, clinical study, etc."
+        )
+        
+        # In the sidebar
+        with st.sidebar:
+            st.header("App Settings")
+            use_memory = st.checkbox("Use column matching memory", value=True)
+            save_matches = st.checkbox("Save new matches to memory", value=True)
             
-            # Display results if available
-            if 'matches' in st.session_state:
-                # Display column interpretations
-                st.markdown("### Step 3: Review Column Interpretations")
-                source_table, dest_table = create_aligned_tables(
-                    source_df.columns.tolist(),
-                    st.session_state.source_expanded,
-                    dest_df.columns.tolist(),
-                    st.session_state.dest_expanded
-                )
+            if use_memory:
+                st.info("Column matching memory is enabled.")
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader("Source Table Columns")
-                    st.dataframe(source_table, hide_index=True)
-                with col2:
-                    st.subheader("Destination Table Columns")
-                    st.dataframe(dest_table, hide_index=True)
-                
-                # Display matches
-                st.markdown("""
-                ### Step 4: Review and Edit Matches
-
-                **Important Notes:**
-                - Each destination column can only be matched to one source column
-                - If multiple source columns seem to match the same destination column:
-                  - Choose the most appropriate match
-                  - Mark others as "No match" or find alternative matches
-                - Use the "Edit" button to change matches
-                - Use the "No Match" button to mark columns that don't have a corresponding match
-                """)
-                display_matches(st.session_state.matches, st.session_state.all_comparisons)
-                
-                # Confirm matching button
-                if st.button("Confirm Matching"):
-                    # Check for duplicate matches
-                    duplicates = validate_matches(st.session_state.edited_matches)
-                    
-                    if duplicates:
-                        # Show warning about duplicate matches
-                        st.error("⚠️ Invalid Matching Detected!")
-                        st.markdown("#### Duplicate Destination Columns Found:")
-                        for dest_col, source_cols in duplicates.items():
-                            st.markdown(f"""
-                            Multiple source columns matched to `{dest_col}`:
-                            {', '.join(f'`{src}`' for src in source_cols)}
-                            """)
-                        st.info("Please fix the matches before confirming. Each destination column can only be matched to one source column.")
+                # Memory management section
+                if st.button("View Memory Contents"):
+                    try:
+                        from column_memory import ColumnMatchMemory
+                        memory = ColumnMatchMemory(MEMORY_FILE_PATH)
+                        matches = memory.get_all_matches()
                         
-                        # Highlight the problematic matches in the display
-                        for i, match in enumerate(st.session_state.edited_matches):
-                            if match['dest_column'] in duplicates:
-                                st.session_state.editing_state[i] = True
-                    else:
-                        # Proceed with normal confirmation
-                        st.session_state.matching_confirmed = True
-                        st.session_state.matched_df = create_matched_source_file(
-                            st.session_state.source_df,
-                            st.session_state.edited_matches
-                        )
-                        
-                        # Save matches to memory immediately after confirmation
-                        if use_memory and save_matches:
-                            try:
-                                from column_memory import ColumnMatchMemory
-                                memory = ColumnMatchMemory(MEMORY_FILE_PATH)
-                                saved_count = 0
-                                
-                                for match in st.session_state.edited_matches:
-                                    source_col = match["source_column"]
-                                    dest_col = match["dest_column"]
-                                    # Save all confirmed matches except NO_MATCH
-                                    if dest_col != "NO_MATCH":
-                                        memory.add_match(source_col, dest_col)
-                                        saved_count += 1
-                                
-                                if saved_count > 0:
-                                    st.success(f"Matching confirmed! {saved_count} matches saved to memory.")
-                                else:
-                                    st.success("Matching confirmed! No new matches to save.")
-                            except Exception as e:
-                                st.warning(f"Could not save matches to memory: {str(e)}")
-                                st.success("Matching confirmed! Your source data has been transformed.")
+                        if matches:
+                            st.write("### Stored Matches")
+                            for src, dest in matches.items():
+                                st.write(f"- {src} → {dest}")
                         else:
-                            st.success("Matching confirmed! Your source data has been transformed.")
+                            st.info("No matches stored in memory yet.")
+                    except Exception as e:
+                        st.error(f"Error accessing memory: {str(e)}")
+        
+        if source_file and dest_file:
+            try:
+                # Load DataFrames
+                source_df = pd.read_csv(source_file)
+                dest_df = pd.read_csv(dest_file)
+                
+                # Store in session state
+                st.session_state.source_df = source_df
+                st.session_state.dest_df = dest_df
+                
+                # Process button
+                if st.button("Match Columns"):
+                    st.session_state.matching_confirmed = False
                     
-                    # Display matched file if confirmed
-                    if st.session_state.matching_confirmed:
-                        if st.session_state.matched_df is not None:  # Add this check
-                            # First, display the column operations summary
-                            st.markdown("### Column Operations Summary")
-                            with st.expander("View Details", expanded=True):
-                                if hasattr(st.session_state, 'column_operations'):
-                                    # Show matched columns
-                                    if st.session_state.column_operations["matched_columns"]:
-                                        st.markdown("#### ✅ Matched and Renamed Columns")
-                                        for src, dest in st.session_state.column_operations["matched_columns"].items():
-                                            st.markdown(f"- `{src}` → `{dest}`")
-                                    else:
-                                        st.info("No columns were matched/renamed.")
+                    # Process files
+                    results = process_files(
+                        source_df, dest_df, context, 
+                        st.session_state.models,
+                        use_memory=use_memory,
+                        save_new_matches=save_matches
+                    )
+                    
+                    source_expanded, dest_expanded, matches, all_comparisons, highest_similarity_pair = results
+                    
+                    # Store results in session state
+                    st.session_state.matches = matches
+                    st.session_state.all_comparisons = all_comparisons
+                    st.session_state.source_expanded = source_expanded
+                    st.session_state.dest_expanded = dest_expanded
+                    
+                    # Reset edited matches
+                    st.session_state.edited_matches = matches.copy()
+                    st.session_state.editing_state = {i: False for i in range(len(matches))}
+                
+                # Display results if available
+                if 'matches' in st.session_state:
+                    # Display column interpretations
+                    st.markdown("### Step 3: Review Column Interpretations")
+                    source_table, dest_table = create_aligned_tables(
+                        source_df.columns.tolist(),
+                        st.session_state.source_expanded,
+                        dest_df.columns.tolist(),
+                        st.session_state.dest_expanded
+                    )
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.subheader("Source Table Columns")
+                        st.dataframe(source_table, hide_index=True)
+                    with col2:
+                        st.subheader("Destination Table Columns")
+                        st.dataframe(dest_table, hide_index=True)
+                    
+                    # Display matches
+                    st.markdown("""
+                    ### Step 4: Review and Edit Matches
 
-                                    # Show kept source columns
-                                    if st.session_state.column_operations["kept_source_columns"]:
-                                        st.markdown("#### 🔄 Kept Original Columns (No Match)")
-                                        for col in st.session_state.column_operations["kept_source_columns"]:
-                                            st.markdown(f"- `{col}`")
-                                    else:
-                                        st.info("No original columns were kept unchanged.")
-
-                                    # Show added missing columns
-                                    if st.session_state.column_operations["added_missing_columns"]:
-                                        st.markdown("#### ➕ Added Missing Columns (Filled with 'MISSING')")
-                                        for col in st.session_state.column_operations["added_missing_columns"]:
-                                            st.markdown(f"- `{col}`")
-                                    else:
-                                        st.info("No missing columns were added.")
-
-                                    # Add a summary of the changes
-                                    st.markdown("---")
-                                    col1, col2, col3 = st.columns(3)
-                                    with col1:
-                                        st.metric("Matched Columns", 
-                                                len(st.session_state.column_operations["matched_columns"]))
-                                    with col2:
-                                        st.metric("Kept Original", 
-                                                len(st.session_state.column_operations["kept_source_columns"]))
-                                    with col3:
-                                        st.metric("Added Missing", 
-                                                len(st.session_state.column_operations["added_missing_columns"]))
-
-                            # Then show the preview with highlighted columns
-                            st.markdown("### Preview of Matched File")
-                            if hasattr(st.session_state, 'column_operations'):
+                    **Important Notes:**
+                    - Each destination column can only be matched to one source column
+                    - If multiple source columns seem to match the same destination column:
+                      - Choose the most appropriate match
+                      - Mark others as "No match" or find alternative matches
+                    - Use the "Edit" button to change matches
+                    - Use the "No Match" button to mark columns that don't have a corresponding match
+                    """)
+                    display_matches(st.session_state.matches, st.session_state.all_comparisons)
+                    
+                    # Confirm matching button
+                    if st.button("Confirm Matching"):
+                        # Check for duplicate matches
+                        duplicates = validate_matches(st.session_state.edited_matches)
+                        
+                        if duplicates:
+                            # Show warning about duplicate matches
+                            st.error("⚠️ Invalid Matching Detected!")
+                            st.markdown("#### Duplicate Destination Columns Found:")
+                            for dest_col, source_cols in duplicates.items():
+                                st.markdown(f"""
+                                Multiple source columns matched to `{dest_col}`:
+                                {', '.join(f'`{src}`' for src in source_cols)}
+                                """)
+                            st.info("Please fix the matches before confirming. Each destination column can only be matched to one source column.")
+                            
+                            # Highlight the problematic matches in the display
+                            for i, match in enumerate(st.session_state.edited_matches):
+                                if match['dest_column'] in duplicates:
+                                    st.session_state.editing_state[i] = True
+                        else:
+                            # Proceed with normal confirmation
+                            st.session_state.matching_confirmed = True
+                            st.session_state.matched_df = create_matched_source_file(
+                                st.session_state.source_df,
+                                st.session_state.edited_matches
+                            )
+                            
+                            # Save matches to memory immediately after confirmation
+                            if use_memory and save_matches:
                                 try:
-                                    # Get lists of columns for highlighting
-                                    kept_columns = st.session_state.column_operations["kept_source_columns"]
-                                    missing_columns = st.session_state.column_operations["added_missing_columns"]
-                                    matched_columns = list(st.session_state.column_operations["matched_columns"].values())
+                                    from column_memory import ColumnMatchMemory
+                                    memory = ColumnMatchMemory(MEMORY_FILE_PATH)
+                                    saved_count = 0
                                     
-                                    # Check for duplicate columns
-                                    if st.session_state.matched_df.columns.duplicated().any():
-                                        st.warning("Duplicate column names detected. Displaying without highlighting.")
-                                        st.dataframe(st.session_state.matched_df.head(10), use_container_width=True)
+                                    for match in st.session_state.edited_matches:
+                                        source_col = match["source_column"]
+                                        dest_col = match["dest_column"]
+                                        # Save all confirmed matches except NO_MATCH
+                                        if dest_col != "NO_MATCH":
+                                            memory.add_match(source_col, dest_col)
+                                            saved_count += 1
+                                    
+                                    if saved_count > 0:
+                                        st.success(f"Matching confirmed! {saved_count} matches saved to memory.")
                                     else:
-                                        # Display the styled dataframe
+                                        st.success("Matching confirmed! No new matches to save.")
+                                except Exception as e:
+                                    st.warning(f"Could not save matches to memory: {str(e)}")
+                                    st.success("Matching confirmed! Your source data has been transformed.")
+                            else:
+                                st.success("Matching confirmed! Your source data has been transformed.")
+                        
+                            # Display matched file if confirmed
+                            if st.session_state.matching_confirmed:
+                                if st.session_state.matched_df is not None:
+                                    # First, display the column operations summary
+                                    st.markdown("### Column Operations Summary")
+                                    with st.expander("View Details", expanded=True):
+                                        if hasattr(st.session_state, 'column_operations'):
+                                            # Show matched columns
+                                            if st.session_state.column_operations["matched_columns"]:
+                                                st.markdown("#### ✅ Matched and Renamed Columns")
+                                                for src, dest in st.session_state.column_operations["matched_columns"].items():
+                                                    st.markdown(f"- `{src}` → `{dest}`")
+                                            else:
+                                                st.info("No columns were matched/renamed.")
+
+                                            # Show kept source columns
+                                            if st.session_state.column_operations["kept_source_columns"]:
+                                                st.markdown("#### 🔄 Kept Original Columns (No Match)")
+                                                for col in st.session_state.column_operations["kept_source_columns"]:
+                                                    st.markdown(f"- `{col}`")
+                                            else:
+                                                st.info("No original columns were kept unchanged.")
+
+                                            # Show added missing columns
+                                            if st.session_state.column_operations["added_missing_columns"]:
+                                                st.markdown("#### ➕ Added Missing Columns (Filled with 'MISSING')")
+                                                for col in st.session_state.column_operations["added_missing_columns"]:
+                                                    st.markdown(f"- `{col}`")
+                                            else:
+                                                st.info("No missing columns were added.")
+
+                                            # Add a summary of the changes
+                                            st.markdown("---")
+                                            col1, col2, col3 = st.columns(3)
+                                            with col1:
+                                                st.metric("Matched Columns", 
+                                                        len(st.session_state.column_operations["matched_columns"]))
+                                            with col2:
+                                                st.metric("Kept Original", 
+                                                        len(st.session_state.column_operations["kept_source_columns"]))
+                                            with col3:
+                                                st.metric("Added Missing", 
+                                                        len(st.session_state.column_operations["added_missing_columns"]))
+
+                                    # Then show the preview with highlighted columns
+                                    st.markdown("### Preview of Matched File")
+                                    if hasattr(st.session_state, 'column_operations'):
+                                        # Get lists of columns for highlighting
+                                        kept_columns = st.session_state.column_operations["kept_source_columns"]
+                                        missing_columns = st.session_state.column_operations["added_missing_columns"]
+                                        matched_columns = list(st.session_state.column_operations["matched_columns"].values())
+
+                                        # Create a styled dataframe
                                         def highlight_columns(df):
                                             if df.index.duplicated().any() or df.columns.duplicated().any():
-                                                # If there are duplicate indices or columns, return unstyled
                                                 return pd.DataFrame('', index=df.index, columns=df.columns)
                                             
                                             styles = pd.DataFrame('', index=df.index, columns=df.columns)
@@ -777,42 +787,47 @@ def main():
                                         """, unsafe_allow_html=True)
 
                                         # Display the styled dataframe
-                                        styled_df = st.session_state.matched_df.head(10).style.apply(highlight_columns, axis=None)
-                                        st.dataframe(styled_df, use_container_width=True)
-                                except Exception as e:
-                                    st.error(f"Error displaying preview: {str(e)}")
-                                    # Fallback to unstyled display
-                                    st.dataframe(st.session_state.matched_df.head(10), use_container_width=True)
-                            else:
-                                st.error("No matched data available. Please confirm the matching first.")
+                                        try:
+                                            if st.session_state.matched_df.columns.duplicated().any():
+                                                st.warning("Duplicate column names detected. Displaying without highlighting.")
+                                                st.dataframe(st.session_state.matched_df.head(10), use_container_width=True)
+                                            else:
+                                                styled_df = st.session_state.matched_df.head(10).style.apply(highlight_columns, axis=None)
+                                                st.dataframe(styled_df, use_container_width=True)
+                                        except Exception as e:
+                                            st.error(f"Error displaying preview: {str(e)}")
+                                            st.dataframe(st.session_state.matched_df.head(10), use_container_width=True)
 
-                            # Download section - Add error handling
-                            try:
-                                st.markdown("### Download Transformed Data")
-                                default_filename = f"{os.path.splitext(st.session_state.source_filename)[0]}_matched.csv"
-                                
-                                # Verify data is available before creating download button
-                                if not st.session_state.matched_df.empty:
-                st.download_button(
-                                        label="Download Matched File",
-                                        data=st.session_state.matched_df.to_csv(index=False).encode('utf-8'),
-                                        file_name=default_filename,
-                                        mime="text/csv",
-                                        key='download-matched-file'
-                                    )
+                                        # Download section
+                                        try:
+                                            st.markdown("### Download Transformed Data")
+                                            default_filename = f"{os.path.splitext(st.session_state.source_filename)[0]}_matched.csv"
+                                            
+                                            if not st.session_state.matched_df.empty:
+                                                st.download_button(
+                                                    label="Download Matched File",
+                                                    data=st.session_state.matched_df.to_csv(index=False).encode('utf-8'),
+                                                    file_name=default_filename,
+                                                    mime="text/csv",
+                                                    key='download-matched-file'
+                                                )
+                                            else:
+                                                st.warning("No data available for download.")
+                                        except Exception as e:
+                                            st.error(f"Error preparing download: {str(e)}")
                                 else:
-                                    st.warning("No data available for download.")
-                            except Exception as e:
-                                st.error(f"Error preparing download: {str(e)}")
-                        else:
-                            st.error("No matched data available. Please confirm the matching first.")
-                
-        except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
-            st.exception(e)
-    
-    else:
-        st.info("Please upload both source and destination CSV files to begin.")
+                                    st.error("No matched data available. Please confirm the matching first.")
+                    
+            except Exception as e:
+                st.error(f"An error occurred: {str(e)}")
+                st.exception(e)
+        
+        else:
+            st.info("Please upload both source and destination CSV files to begin.")
+
+    except Exception as e:
+        st.error(f"Critical error in main function: {str(e)}")
+        st.exception(e)
 
 if __name__ == "__main__":
     main()
