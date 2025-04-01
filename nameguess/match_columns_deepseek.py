@@ -38,10 +38,10 @@ def init_rag():
     global medical_rag
     try:
         medical_rag = SimpleMedicalRAG()
-        logger.info("Initialized SimpleMedicalRAG")
+        logger.info("Initialized Medical Abbreviation RAG System")
         return medical_rag.is_available
     except Exception as e:
-        logger.error(f"Error initializing SimpleMedicalRAG: {str(e)}")
+        logger.error(f"Error initializing Medical Abbreviation RAG System: {str(e)}")
         return False
 
 # DeepSeek integration using direct API calls
