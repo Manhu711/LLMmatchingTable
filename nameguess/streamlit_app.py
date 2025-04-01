@@ -462,6 +462,16 @@ def validate_matches(matches):
 def main():
     st.title("LLM Based CSV Table Matcher")
     
+    # Initialize models first
+    if 'models' not in st.session_state:
+        try:
+            with st.spinner('Loading models...'):
+                st.session_state.models = load_models()
+        except Exception as e:
+            st.error("Failed to load required models. Please check your configuration.")
+            st.exception(e)
+            return
+    
     # Add RAG status indicator and deployment info in sidebar
     with st.sidebar:
         st.header("System Status")
@@ -494,7 +504,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Initialize session state for matched file
+    # Initialize session state
     if 'matched_df' not in st.session_state:
         st.session_state.matched_df = None
     if 'matching_confirmed' not in st.session_state:
