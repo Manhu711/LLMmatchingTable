@@ -119,10 +119,10 @@ def display_matches(matches, all_comparisons):
     dropdown_options = memory_options + dest_cols + ["-- No match --"]
     
     # Create a set of already matched destination columns
-    matched_dest_cols = {
-        match['dest_column'] for match in st.session_state.edited_matches 
-        if match['dest_column'] != "NO_MATCH"
-    }
+    matched_dest_cols = {}  # Change to dict to track which source column uses each dest column
+    for idx, match in enumerate(st.session_state.edited_matches):
+        if match['dest_column'] != "NO_MATCH":
+            matched_dest_cols[match['dest_column']] = match['source_column']
     
     # Now display the matches
     for i, match in enumerate(st.session_state.edited_matches):
@@ -156,23 +156,37 @@ def display_matches(matches, all_comparisons):
                     st.session_state.edited_matches[i]['dest_expanded'] = "NO_MATCH"
                     st.session_state.edited_matches[i]['similarity_score'] = 0.0
                 else:
-                    st.session_state.edited_matches[i]['dest_column'] = selected_dest
+                    # Remove memory indicators if present
+                    clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
                     
-                    # Try to get the expanded name
-                    try:
-                        if 'dest_expanded' in st.session_state and 'dest_df' in st.session_state:
-                            dest_idx = st.session_state.dest_df.columns.get_loc(selected_dest)
-                            if dest_idx < len(st.session_state.dest_expanded):
-                                st.session_state.edited_matches[i]['dest_expanded'] = st.session_state.dest_expanded[dest_idx]
+                    # Check if this destination column is already matched to a different source column
+                    if (clean_dest in matched_dest_cols and 
+                        matched_dest_cols[clean_dest] != match['source_column']):
+                        st.error(f"""
+                        ⚠️ This destination column '{clean_dest}' is already matched to source column '{matched_dest_cols[clean_dest]}'.
+                        Please choose a different destination column or use "No match".
+                        """)
+                        # Don't update the match
+                        continue
+                    else:
+                        # Update the match
+                        st.session_state.edited_matches[i]['dest_column'] = clean_dest
+                        
+                        # Try to get the expanded name
+                        try:
+                            if 'dest_expanded' in st.session_state and 'dest_df' in st.session_state:
+                                dest_idx = st.session_state.dest_df.columns.get_loc(selected_dest)
+                                if dest_idx < len(st.session_state.dest_expanded):
+                                    st.session_state.edited_matches[i]['dest_expanded'] = st.session_state.dest_expanded[dest_idx]
+                                else:
+                                    st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
                             else:
                                 st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                        else:
+                        except Exception:
                             st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                    except Exception:
-                        st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                    
-                    # Set high similarity for manually selected
-                    st.session_state.edited_matches[i]['similarity_score'] = 1.0
+                        
+                        # Set high similarity for manually selected
+                        st.session_state.edited_matches[i]['similarity_score'] = 1.0
             else:
                 # Display the current match
                 if match['dest_column'] == "NO_MATCH":
@@ -211,25 +225,6 @@ def display_matches(matches, all_comparisons):
             # If already NO_MATCH, show a disabled button or indicator
             elif not st.session_state.editing_state.get(i, False) and match['dest_column'] == "NO_MATCH":
                 st.markdown("✓ No Match")
-
-        # In the column display loop, after selected_dest is chosen:
-        if selected_dest != "-- No match --":
-            # Remove "(from memory)" suffix if present
-            clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
-            
-            # Check if this destination column is already matched
-            if clean_dest in matched_dest_cols:
-                current_match = next(
-                    match for match in st.session_state.edited_matches 
-                    if match['dest_column'] == clean_dest
-                )
-                st.warning(f"""
-                    ⚠️ Warning: Column `{clean_dest}` is already matched to source column `{current_match['source_column']}`.
-                    Matching multiple source columns to the same destination column is not allowed.
-                    Please choose a different destination column or use "No match" if there's no appropriate match.
-                    """)
-                # Don't update the match
-                continue
 
 @st.cache_resource
 def load_semantic_model():
@@ -599,11 +594,12 @@ def main():
                 except Exception as e:
                     st.error(f"Error accessing memory: {str(e)}")
             
-            # Add Clear Memory section with password protection
+            # Add Clear Memory section
+            st.markdown("---")
             st.markdown("### Clear Memory")
-            admin_password = st.text_input("Admin Password", type="password")
-            if st.button("Clear Matching Memory"):
-                if admin_password == "admin123":  # You can change this password
+            with st.expander("⚠️ Clear Matching Memory"):
+                st.warning("This will delete all saved column matches. This action cannot be undone.")
+                if st.button("Clear All Matches", key="clear_memory_button"):
                     try:
                         success, message = clear_column_memory()
                         if success:
@@ -615,8 +611,6 @@ def main():
                             st.error(f"Failed to clear memory: {message}")
                     except Exception as e:
                         st.error(f"Error clearing memory: {str(e)}")
-                else:
-                    st.error("❌ Incorrect password")
     
     if source_file and dest_file:
         try:
