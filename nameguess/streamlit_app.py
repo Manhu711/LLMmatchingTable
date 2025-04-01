@@ -119,10 +119,10 @@ def display_matches(matches, all_comparisons):
     dropdown_options = memory_options + dest_cols + ["-- No match --"]
     
     # Create a set of already matched destination columns
-    matched_dest_cols = {}  # Change to dict to track which source column uses each dest column
-    for idx, match in enumerate(st.session_state.edited_matches):
-        if match['dest_column'] != "NO_MATCH":
-            matched_dest_cols[match['dest_column']] = match['source_column']
+    matched_dest_cols = {
+        match['dest_column'] for match in st.session_state.edited_matches 
+        if match['dest_column'] != "NO_MATCH"
+    }
     
     # Now display the matches
     for i, match in enumerate(st.session_state.edited_matches):
@@ -156,37 +156,23 @@ def display_matches(matches, all_comparisons):
                     st.session_state.edited_matches[i]['dest_expanded'] = "NO_MATCH"
                     st.session_state.edited_matches[i]['similarity_score'] = 0.0
                 else:
-                    # Remove memory indicators if present
-                    clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
+                    st.session_state.edited_matches[i]['dest_column'] = selected_dest
                     
-                    # Check if this destination column is already matched to a different source column
-                    if (clean_dest in matched_dest_cols and 
-                        matched_dest_cols[clean_dest] != match['source_column']):
-                        st.error(f"""
-                        ⚠️ This destination column '{clean_dest}' is already matched to source column '{matched_dest_cols[clean_dest]}'.
-                        Please choose a different destination column or use "No match".
-                        """)
-                        # Don't update the match
-                        continue
-                    else:
-                        # Update the match
-                        st.session_state.edited_matches[i]['dest_column'] = clean_dest
-                        
-                        # Try to get the expanded name
-                        try:
-                            if 'dest_expanded' in st.session_state and 'dest_df' in st.session_state:
-                                dest_idx = st.session_state.dest_df.columns.get_loc(selected_dest)
-                                if dest_idx < len(st.session_state.dest_expanded):
-                                    st.session_state.edited_matches[i]['dest_expanded'] = st.session_state.dest_expanded[dest_idx]
-                                else:
-                                    st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
+                    # Try to get the expanded name
+                    try:
+                        if 'dest_expanded' in st.session_state and 'dest_df' in st.session_state:
+                            dest_idx = st.session_state.dest_df.columns.get_loc(selected_dest)
+                            if dest_idx < len(st.session_state.dest_expanded):
+                                st.session_state.edited_matches[i]['dest_expanded'] = st.session_state.dest_expanded[dest_idx]
                             else:
                                 st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                        except Exception:
+                        else:
                             st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
-                        
-                        # Set high similarity for manually selected
-                        st.session_state.edited_matches[i]['similarity_score'] = 1.0
+                    except Exception:
+                        st.session_state.edited_matches[i]['dest_expanded'] = selected_dest
+                    
+                    # Set high similarity for manually selected
+                    st.session_state.edited_matches[i]['similarity_score'] = 1.0
             else:
                 # Display the current match
                 if match['dest_column'] == "NO_MATCH":
@@ -225,6 +211,25 @@ def display_matches(matches, all_comparisons):
             # If already NO_MATCH, show a disabled button or indicator
             elif not st.session_state.editing_state.get(i, False) and match['dest_column'] == "NO_MATCH":
                 st.markdown("✓ No Match")
+
+        # In the column display loop, after selected_dest is chosen:
+        if selected_dest != "-- No match --":
+            # Remove "(from memory)" suffix if present
+            clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
+            
+            # Check if this destination column is already matched
+            if clean_dest in matched_dest_cols:
+                current_match = next(
+                    match for match in st.session_state.edited_matches 
+                    if match['dest_column'] == clean_dest
+                )
+                st.warning(f"""
+                    ⚠️ Warning: Column `{clean_dest}` is already matched to source column `{current_match['source_column']}`.
+                    Matching multiple source columns to the same destination column is not allowed.
+                    Please choose a different destination column or use "No match" if there's no appropriate match.
+                    """)
+                # Don't update the match
+                continue
 
 @st.cache_resource
 def load_semantic_model():
@@ -452,37 +457,10 @@ def validate_matches(matches):
     
     return duplicates
 
-def reset_session_state():
-    """Reset all session state variables"""
-    keys_to_keep = ['models']  # Keep cached models to avoid reloading
-    for key in list(st.session_state.keys()):
-        if key not in keys_to_keep:
-            del st.session_state[key]
-
-def validate_csv_file(file, file_type="source"):
-    """Validate uploaded CSV file"""
-    try:
-        # Try to read the first few rows to validate
-        df = pd.read_csv(file)
-        
-        # Check if file has any columns
-        if len(df.columns) == 0:
-            return False, f"The {file_type} file contains no columns."
-        
-        # Check if file has any data
-        if len(df) == 0:
-            return False, f"The {file_type} file contains no data."
-        
-        return True, df
-    except pd.errors.EmptyDataError:
-        return False, f"The {file_type} file is empty or invalid."
-    except Exception as e:
-        return False, f"Error reading {file_type} file: {str(e)}"
-
 def main():
     st.title("LLM Based CSV Table Matcher")
     
-    # Add RAG status indicator and memory management in sidebar
+    # Add RAG status indicator in sidebar
     with st.sidebar:
         st.header("System Status")
         rag_available = init_rag()
@@ -491,40 +469,13 @@ def main():
         else:
             st.warning("⚠️ Medical Abbreviation System: Not Available")
             st.info("To enable medical abbreviation support, ensure the simplified medical abbreviations dictionary is present.")
-
-        # Add deployment info
-        is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
-        if is_cloud:
-            st.sidebar.success("🌐 Running on Streamlit Cloud")
-        else:
-            st.sidebar.info("💻 Running Locally")
-
-        # Simple memory settings
-        st.markdown("---")
-        st.header("Settings")
-        use_memory = st.checkbox("Use column matching memory", value=True, 
-                               help="If enabled, the app will remember previous successful matches.")
-        save_matches = st.checkbox("Save new matches to memory", value=True,
-                               help="If enabled, new high-confidence matches will be saved.")
-
-        if use_memory:
-            st.info("Column matching memory is enabled.")
-            
-            # View Memory Contents button
-            if st.button("View Memory Contents"):
-                try:
-                    from column_memory import ColumnMatchMemory
-                    memory = ColumnMatchMemory(MEMORY_FILE_PATH)
-                    matches = memory.get_all_matches()
-                    
-                    if matches:
-                        st.write("### Stored Matches")
-                        for src, dest in matches.items():
-                            st.write(f"- {src} → {dest}")
-                    else:
-                        st.info("No matches stored in memory yet.")
-                except Exception as e:
-                    st.error(f"Error accessing memory: {str(e)}")
+    
+    # Add deployment info
+    is_cloud = os.environ.get('STREAMLIT_DEPLOYMENT', '') == 'cloud'
+    if is_cloud:
+        st.sidebar.success("🌐 Running on Streamlit Cloud")
+    else:
+        st.sidebar.info("💻 Running Locally")
     
     # Add brief introduction with better styling
     st.markdown("""
@@ -567,35 +518,12 @@ def main():
     
     col1, col2 = st.columns(2)
     with col1:
-        source_file = st.file_uploader("Upload Source CSV", type=['csv'], key='source_file_uploader')
-        if source_file is not None:
-            valid, result = validate_csv_file(source_file, "source")
-            if valid:
-                source_df = result
-                st.session_state.source_filename = source_file.name
-                st.session_state.source_df = source_df
-                st.session_state.matching_confirmed = False
-                st.success(f"Source file loaded successfully with {len(source_df.columns)} columns.")
-            else:
-                st.error(result)
-                source_file = None
-    
+        source_file = st.file_uploader("Upload Source CSV", type=['csv'])
+        if source_file is not None and st.session_state.source_filename != source_file.name:
+            st.session_state.source_filename = source_file.name
+            st.session_state.matching_confirmed = False
     with col2:
-        dest_file = st.file_uploader("Upload Destination CSV", type=['csv'], key='dest_file_uploader')
-        if dest_file is not None:
-            valid, result = validate_csv_file(dest_file, "destination")
-            if valid:
-                dest_df = result
-                st.session_state.dest_df = dest_df
-                st.success(f"Destination file loaded successfully with {len(dest_df.columns)} columns.")
-            else:
-                st.error(result)
-                dest_file = None
-    
-    # Only proceed if both files are uploaded successfully
-    if source_file is None or dest_file is None:
-        st.info("Please upload both source and destination CSV files to begin.")
-        return
+        dest_file = st.file_uploader("Upload Destination CSV", type=['csv'])
     
     # Context input with explanation
     st.markdown("### Step 2: Provide Context (Optional)")
@@ -608,6 +536,31 @@ def main():
         "Context", 
         placeholder="e.g., medical data, clinical study, etc."
     )
+    
+    # In the sidebar
+    with st.sidebar:
+        st.header("App Settings")
+        use_memory = st.checkbox("Use column matching memory", value=True)
+        save_matches = st.checkbox("Save new matches to memory", value=True)
+        
+        if use_memory:
+            st.info("Column matching memory is enabled.")
+            
+            # Memory management section
+            if st.button("View Memory Contents"):
+                try:
+                    from column_memory import ColumnMatchMemory
+                    memory = ColumnMatchMemory(MEMORY_FILE_PATH)
+                    matches = memory.get_all_matches()
+                    
+                    if matches:
+                        st.write("### Stored Matches")
+                        for src, dest in matches.items():
+                            st.write(f"- {src} → {dest}")
+                    else:
+                        st.info("No matches stored in memory yet.")
+                except Exception as e:
+                    st.error(f"Error accessing memory: {str(e)}")
     
     if source_file and dest_file:
         try:
@@ -840,7 +793,7 @@ def main():
                                 
                                 # Verify data is available before creating download button
                                 if not st.session_state.matched_df.empty:
-                                    st.download_button(
+                st.download_button(
                                         label="Download Matched File",
                                         data=st.session_state.matched_df.to_csv(index=False).encode('utf-8'),
                                         file_name=default_filename,
