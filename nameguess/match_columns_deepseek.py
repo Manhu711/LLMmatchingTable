@@ -339,13 +339,16 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
     """Process source and destination files to match columns."""
     # Initialize our column memory
     if use_memory:
-        # Ensure data directory exists
         os.makedirs(os.path.dirname(os.path.abspath(memory_file)), exist_ok=True)
         column_memory = ColumnMatchMemory(memory_file)
     else:
         column_memory = None
     
-    # ... existing code to load files and get columns ...
+    # Load files and get columns
+    source_df = pd.read_csv(source_file)
+    dest_df = pd.read_csv(dest_file)
+    source_cols = list(source_df.columns)
+    dest_cols = list(dest_df.columns)
     
     # Check memory for existing matches
     memory_matches = {}
@@ -357,26 +360,25 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
     
     # Only process columns that need expansion
     if columns_to_expand:
-        # ... existing code for abbreviation expansion ...
         source_expanded = expand_abbreviations(columns_to_expand, context, deepseek_model, prompt_template, verbose)
-        # Create full source_expanded list by combining memory and new expansions
         all_expanded = []
         expansion_index = 0
         for col in source_cols:
             if col in memory_matches:
-                # Use a placeholder - we'll use memory for matching directly
                 all_expanded.append(f"MEMORY_MATCH:{col}")
             else:
                 all_expanded.append(source_expanded[expansion_index])
                 expansion_index += 1
     else:
-        # If all columns are in memory, we still need a placeholder list
         all_expanded = [f"MEMORY_MATCH:{col}" for col in source_cols]
     
-    # Expand destination columns as normal
+    # Expand destination columns
     dest_expanded = expand_abbreviations(dest_cols, context, deepseek_model, prompt_template, verbose)
     
-    # Modify the match_columns function call
+    # Ensure only the top three predictions are used for destination columns
+    dest_expanded = [' | '.join(exp.split(prompt_template.sep_token)[:3]) for exp in dest_expanded]
+    
+    # Match columns
     matches, all_comparisons, highest_similarity_pair = match_columns(
         source_cols, dest_cols, all_expanded, dest_expanded, 
         semantic_model, memory_matches=memory_matches
@@ -387,8 +389,7 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
         for match in matches:
             source_col = match["source_column"]
             dest_col = match["dest_column"]
-            # Only save matches with high confidence
-            if match["similarity_score"] > 0.85:  # Threshold can be adjusted
+            if match["similarity_score"] > 0.85:
                 column_memory.add_match(source_col, dest_col)
     
     return matches, all_comparisons, highest_similarity_pair
