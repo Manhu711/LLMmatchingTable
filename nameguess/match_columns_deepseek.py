@@ -215,7 +215,7 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     
     prompt = (
         f"{context_part}{rag_context}{prompt_template.demos}{query}"
-        "Provide the expanded names as a list separated by ' | '. "
+        "If available, provide the first three most likely expanded names as a list separated by ' | '. "
         "Do not include additional explanations."
     )
 
