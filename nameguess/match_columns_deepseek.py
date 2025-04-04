@@ -225,8 +225,12 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     raw_answer = model(prompt)
     time.sleep(1)  # Rate limiting
     
+    # Extract the top three expanded names
     predictions = extract_answer(raw_answer, prompt_template.sep_token, abbreviations)
     
+    # Ensure only the top three predictions are returned
+    predictions = [pred.split(prompt_template.sep_token)[:3] for pred in predictions]
+
     if len(predictions) != len(abbreviations):
         logger.warning(f"Mismatch in predictions length. Expected {len(abbreviations)}, got {len(predictions)}")
         predictions = [" "] * len(abbreviations)
