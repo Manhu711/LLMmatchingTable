@@ -111,81 +111,48 @@ def extract_answer(raw_answer_str: str, sep_token: str, abbreviations: list):
         # Log the raw answer for debugging
         logger.info(f"Raw answer from LLM: {raw_answer_str}")
         
-        # Clean the raw answer string
-        raw_answer_str = raw_answer_str.strip()
+        # Clean the raw answer string and remove leading/trailing separators
+        raw_answer_str = raw_answer_str.strip().strip(sep_token)
         
-        # Initialize predictions list
+        # Split the answer into individual responses and clean each one
+        responses = raw_answer_str.split("\n")  # First split by newlines
+        
         predictions = []
+        current_abbr_index = 0
         
-        # First attempt: Split on sep_token (expected format)
-        answer_list = [ans.strip() for ans in raw_answer_str.split(sep_token)]
-        
-        # Match each abbreviation with its expansion
-        for i, abbr in enumerate(abbreviations):
-            if i < len(answer_list):
-                # Take only the first expansion for each abbreviation
-                expansion = answer_list[i].strip()
-                # Remove any instances of other abbreviations or their expansions
-                for other_abbr in abbreviations:
-                    if other_abbr != abbr and other_abbr in expansion:
-                        expansion = expansion.split(other_abbr)[0].strip()
-                predictions.append(expansion)
-            else:
-                predictions.append("")
-        
-        # If we didn't get enough predictions, try alternative parsing
-        if len(predictions) < len(abbreviations):
-            logger.warning("First attempt at parsing failed, trying alternative method")
-            predictions = []
-            
-            # Look for direct mappings in the text
-            for abbr in abbreviations:
-                # Try multiple patterns to capture different response formats
-                patterns = [
-                    rf"{re.escape(abbr)}[^-]*?:[ \t]*([^\n\.|]+)",  # abbr: expansion
-                    rf"{re.escape(abbr)}[ \t]+->[ \t]+([^\n\.|]+)",  # abbr -> expansion
-                    rf"{re.escape(abbr)}[^-]*?means[ \t]*[\"']([^\"']+)[\"']",  # abbr means "expansion"
-                    rf"{re.escape(abbr)}[^-]*?is[ \t]*[\"']([^\"']+)[\"']"  # abbr is "expansion"
-                ]
+        for response in responses:
+            response = response.strip()
+            if not response:
+                continue
                 
-                for pattern in patterns:
-                    match = re.search(pattern, raw_answer_str, re.IGNORECASE)
-                    if match:
-                        expansion = match.group(1).strip()
-                        # Remove any instances of other abbreviations or their expansions
-                        for other_abbr in abbreviations:
-                            if other_abbr != abbr and other_abbr in expansion:
-                                expansion = expansion.split(other_abbr)[0].strip()
-                        predictions.append(expansion)
-                        break
-                else:
-                    # If no pattern matched, use a fallback
-                    predictions.append(abbr)
-        
-        logger.debug(f"Extracted predictions: {predictions}")
+            # Remove any leading/trailing separators
+            response = response.strip(sep_token)
+            
+            # If we find a direct mapping pattern, use it
+            for abbr in abbreviations[current_abbr_index:]:
+                pattern = rf"(?:^|\s){re.escape(abbr)}[:\s-]+([^|]+)(?:\||$)"
+                match = re.search(pattern, response, re.IGNORECASE)
+                if match:
+                    expansion = match.group(1).strip()
+                    predictions.append(expansion)
+                    current_abbr_index += 1
+                    break
+            
+            # If no direct mapping found, try to use the next available expansion
+            if current_abbr_index >= len(predictions):
+                parts = [p.strip() for p in response.split(sep_token)]
+                if parts:
+                    predictions.append(parts[0])  # Take only the first expansion
+                    current_abbr_index += 1
         
         # Ensure we have the correct number of predictions
-        if len(predictions) > len(abbreviations):
-            predictions = predictions[:len(abbreviations)]
-        elif len(predictions) < len(abbreviations):
+        if len(predictions) < len(abbreviations):
             predictions.extend([""] * (len(abbreviations) - len(predictions)))
+        elif len(predictions) > len(abbreviations):
+            predictions = predictions[:len(abbreviations)]
         
-        # Final cleanup: ensure each prediction is unique and doesn't contain other column names
-        final_predictions = []
-        for i, pred in enumerate(predictions):
-            # Clean up the prediction by removing any other column names or their expansions
-            clean_pred = pred
-            for j, other_abbr in enumerate(abbreviations):
-                if i != j:  # Don't remove the current abbreviation
-                    if other_abbr in clean_pred:
-                        clean_pred = clean_pred.split(other_abbr)[0].strip()
-                    if predictions[j] in clean_pred and predictions[j] != clean_pred:
-                        clean_pred = clean_pred.split(predictions[j])[0].strip()
-            
-            final_predictions.append(clean_pred)
-        
-        logger.debug(f"Final cleaned predictions: {final_predictions}")
-        return final_predictions
+        logger.debug(f"Final predictions: {predictions}")
+        return predictions
         
     except Exception as e:
         logger.error(f"Error extracting answer: {str(e)}")
@@ -210,12 +177,18 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     """Expand abbreviations using the LLM and simplified medical RAG."""
     global medical_rag
     
+    # Add debug logging
+    logger.info(f"Starting expansion for abbreviations: {abbreviations}")
+    
     # Initialize RAG if not already done
     if medical_rag is None:
         init_rag()
     
-    # Construct prompt
-    query = f"Expand: {' | '.join(abbreviations)} "
+    # Construct prompt with emphasis on single expansion per abbreviation
+    query = "Expand these abbreviations (one expansion per abbreviation):\n"
+    for abbr in abbreviations:
+        query += f"{abbr}\n"
+    
     context_part = f"Context: {context}. " if context else ""
     
     # Add RAG context if available
@@ -224,32 +197,42 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
         for abbr in abbreviations:
             context = medical_rag.get_context_for_llm(abbr)
             if context and "No abbreviation information found" not in context:
-                rag_context += context
+                rag_context += f"{abbr}: {context}\n"
     
     if rag_context:
-        rag_context = f"Medical abbreviation reference:\n{rag_context}\n"
-        if verbose:
-            print("Using medical RAG context:", rag_context)
+        rag_context = f"Medical abbreviation reference:\n{rag_context}"
+        logger.debug(f"Using RAG context: {rag_context}")
     
     prompt = (
-        f"{context_part}{rag_context}{prompt_template.demos}{query}"
-        "Provide the expanded names as a list separated by ' | '. "
-        "Do not include additional explanations."
+        f"{context_part}{rag_context}\n"
+        "IMPORTANT: For each abbreviation, provide exactly ONE expanded name.\n"
+        "Format: abbreviation: expanded_name\n"
+        "Example: c_name: Customer Name\n\n"
+        f"{query}"
     )
 
-    if verbose:
-        print("\nPrompt:", prompt)
-
+    logger.debug(f"Generated prompt: {prompt}")
     raw_answer = model(prompt)
+    logger.debug(f"Raw model response: {raw_answer}")
+    
     time.sleep(1)  # Rate limiting
     
+    # Extract and process predictions
     predictions = extract_answer(raw_answer, prompt_template.sep_token, abbreviations)
+    logger.debug(f"Processed predictions: {predictions}")
     
-    if len(predictions) != len(abbreviations):
-        logger.warning(f"Mismatch in predictions length. Expected {len(abbreviations)}, got {len(predictions)}")
-        predictions = [" "] * len(abbreviations)
+    # Ensure we have exactly one prediction per abbreviation
+    final_predictions = []
+    for i, pred in enumerate(predictions):
+        # Remove any separator tokens that might have been included
+        clean_pred = pred.split(prompt_template.sep_token)[0].strip()
+        final_predictions.append(clean_pred)
+    
+    if len(final_predictions) != len(abbreviations):
+        logger.warning(f"Mismatch in predictions length. Expected {len(abbreviations)}, got {len(final_predictions)}")
+        final_predictions = [" "] * len(abbreviations)
 
-    return predictions
+    return final_predictions
 
 @st.cache_resource
 def load_models():
