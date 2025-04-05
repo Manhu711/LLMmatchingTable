@@ -108,48 +108,36 @@ class DeepSeekLLM:
 def extract_answer(raw_answer_str: str, sep_token: str, abbreviations: list):
     """Process the raw model output into a list of expanded column names."""
     try:
-        # Log the raw answer for debugging
         logger.info(f"Raw answer from LLM: {raw_answer_str}")
         
-        # Clean the raw answer string and remove leading/trailing separators
-        raw_answer_str = raw_answer_str.strip().strip(sep_token)
-        
-        # Split the answer into individual responses and clean each one
-        responses = raw_answer_str.split("\n")  # First split by newlines
-        
+        # Initialize predictions list
         predictions = []
-        current_abbr_index = 0
         
-        for response in responses:
-            response = response.strip()
-            if not response:
-                continue
+        # Split response by newlines first
+        lines = raw_answer_str.strip().split('\n')
+        
+        # Process each line
+        for abbr in abbreviations:
+            expansion = ""
+            # Look for the abbreviation in each line
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                    
+                # Try to match the exact abbreviation followed by the separator or colon
+                pattern = rf"^{re.escape(abbr)}(?:{re.escape(sep_token)}|:\s*)(.+)$"
+                match = re.search(pattern, line, re.IGNORECASE)
                 
-            # Remove any leading/trailing separators
-            response = response.strip(sep_token)
-            
-            # If we find a direct mapping pattern, use it
-            for abbr in abbreviations[current_abbr_index:]:
-                pattern = rf"(?:^|\s){re.escape(abbr)}[:\s-]+([^|]+)(?:\||$)"
-                match = re.search(pattern, response, re.IGNORECASE)
                 if match:
                     expansion = match.group(1).strip()
-                    predictions.append(expansion)
-                    current_abbr_index += 1
                     break
             
-            # If no direct mapping found, try to use the next available expansion
-            if current_abbr_index >= len(predictions):
-                parts = [p.strip() for p in response.split(sep_token)]
-                if parts:
-                    predictions.append(parts[0])  # Take only the first expansion
-                    current_abbr_index += 1
-        
-        # Ensure we have the correct number of predictions
-        if len(predictions) < len(abbreviations):
-            predictions.extend([""] * (len(abbreviations) - len(predictions)))
-        elif len(predictions) > len(abbreviations):
-            predictions = predictions[:len(abbreviations)]
+            # If no expansion found, use a fallback
+            if not expansion:
+                expansion = abbr
+                
+            predictions.append(expansion)
         
         logger.debug(f"Final predictions: {predictions}")
         return predictions
@@ -163,13 +151,15 @@ class PromptTemplate:
     def demos(self):
         _demo = (
             "As abbreviations of column names from a table, "
-            "c_name | pCd | dt stand for Customer Name | Product Code | Date. "
+            "c_name => Customer Name\n"
+            "pCd => Product Code\n"
+            "dt => Date"
         )
         return _demo
 
     @property
     def sep_token(self):
-        _sep_token = " | "
+        _sep_token = " => "  # Changed from " | " to " => "
         return _sep_token
 
 def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM, 
@@ -177,14 +167,12 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     """Expand abbreviations using the LLM and simplified medical RAG."""
     global medical_rag
     
-    # Add debug logging
     logger.info(f"Starting expansion for abbreviations: {abbreviations}")
     
-    # Initialize RAG if not already done
     if medical_rag is None:
         init_rag()
     
-    # Construct prompt with emphasis on single expansion per abbreviation
+    # Construct prompt for one-to-one mapping
     query = "Expand these abbreviations (one expansion per abbreviation):\n"
     for abbr in abbreviations:
         query += f"{abbr}\n"
@@ -206,8 +194,8 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     prompt = (
         f"{context_part}{rag_context}\n"
         "IMPORTANT: For each abbreviation, provide exactly ONE expanded name.\n"
-        "Format: abbreviation: expanded_name\n"
-        "Example: c_name: Customer Name\n\n"
+        f"Format: abbreviation{prompt_template.sep_token}expanded_name\n"
+        f"{prompt_template.demos}\n\n"
         f"{query}"
     )
 
@@ -221,11 +209,11 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     predictions = extract_answer(raw_answer, prompt_template.sep_token, abbreviations)
     logger.debug(f"Processed predictions: {predictions}")
     
-    # Ensure we have exactly one prediction per abbreviation
+    # Ensure clean predictions without any separators
     final_predictions = []
-    for i, pred in enumerate(predictions):
-        # Remove any separator tokens that might have been included
-        clean_pred = pred.split(prompt_template.sep_token)[0].strip()
+    for pred in predictions:
+        # Remove any remaining separators or special characters
+        clean_pred = re.sub(r'[|=>:\t]+', ' ', pred).strip()
         final_predictions.append(clean_pred)
     
     if len(final_predictions) != len(abbreviations):
