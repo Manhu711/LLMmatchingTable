@@ -192,11 +192,14 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     """Expand abbreviations using the LLM and simplified medical RAG."""
     global medical_rag
     
+    # Add debug logging
+    logger.info(f"Starting expansion for abbreviations: {abbreviations}")
+    
     # Initialize RAG if not already done
     if medical_rag is None:
         init_rag()
     
-    # Construct prompt
+    # Construct prompt with emphasis on single best expansion
     query = f"Expand: {' | '.join(abbreviations)} "
     context_part = f"Context: {context}. " if context else ""
     
@@ -210,35 +213,40 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     
     if rag_context:
         rag_context = f"Medical abbreviation reference:\n{rag_context}\n"
-        if verbose:
-            print("Using medical RAG context:", rag_context)
+        logger.debug(f"Using RAG context: {rag_context}")
     
     prompt = (
         f"{context_part}{rag_context}{prompt_template.demos}{query}"
-        "If available, provide the first three most likely expanded names as a list separated by ' | '. "
-        "Do not include additional explanations."
+        "IMPORTANT: For each abbreviation, provide ONLY THE SINGLE MOST LIKELY expanded name. "
+        "Do not provide multiple options or alternatives. "
+        "Separate each expansion with ' | '. "
+        "Focus on the most accurate and commonly used expansion in medical context."
     )
 
-    if verbose:
-        print("\nPrompt:", prompt)
-
+    logger.debug(f"Generated prompt: {prompt}")
     raw_answer = model(prompt)
+    logger.debug(f"Raw model response: {raw_answer}")
+    
     time.sleep(1)  # Rate limiting
     
-    # Extract the top three expanded names
+    # Extract single expansion for each abbreviation
     predictions = extract_answer(raw_answer, prompt_template.sep_token, abbreviations)
+    logger.debug(f"Initial predictions: {predictions}")
     
-    # Ensure only the top three predictions are returned
-    predictions = [pred.split(prompt_template.sep_token)[:3] for pred in predictions]
+    # Ensure single prediction per abbreviation
+    final_predictions = []
+    for pred in predictions:
+        # Take only the first expansion if multiple are provided
+        expansion = pred.split(prompt_template.sep_token)[0].strip()
+        final_predictions.append(expansion)
+    
+    logger.debug(f"Final predictions (single expansion): {final_predictions}")
+    
+    if len(final_predictions) != len(abbreviations):
+        logger.warning(f"Mismatch in predictions length. Expected {len(abbreviations)}, got {len(final_predictions)}")
+        final_predictions = [" "] * len(abbreviations)
 
-    # Join the top three predictions back into a single string for each abbreviation
-    predictions = [' | '.join(pred) for pred in predictions]
-
-    if len(predictions) != len(abbreviations):
-        logger.warning(f"Mismatch in predictions length. Expected {len(abbreviations)}, got {len(predictions)}")
-        predictions = [" "] * len(abbreviations)
-
-    return predictions
+    return final_predictions
 
 @st.cache_resource
 def load_models():
@@ -337,12 +345,18 @@ def match_columns(source_cols, dest_cols, source_expanded, dest_expanded,
 
 def process_files(source_file, dest_file, context=None, use_memory=True, memory_file="data/column_matches.json", save_new_matches=True):
     """Process source and destination files to match columns."""
+    logger.info("Starting process_files")
+    logger.debug(f"Processing source file: {source_file}")
+    logger.debug(f"Processing destination file: {dest_file}")
+    
     # Initialize our column memory
     if use_memory:
         os.makedirs(os.path.dirname(os.path.abspath(memory_file)), exist_ok=True)
         column_memory = ColumnMatchMemory(memory_file)
+        logger.debug("Column memory initialized")
     else:
         column_memory = None
+        logger.debug("Column memory disabled")
     
     # Load files and get columns
     source_df = pd.read_csv(source_file)
@@ -350,17 +364,23 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
     source_cols = list(source_df.columns)
     dest_cols = list(dest_df.columns)
     
+    logger.debug(f"Source columns: {source_cols}")
+    logger.debug(f"Destination columns: {dest_cols}")
+    
     # Check memory for existing matches
     memory_matches = {}
     if use_memory and column_memory:
         memory_matches = column_memory.find_matches(source_cols, dest_cols)
-        
-    # Determine which columns need expansion through the LLM
-    columns_to_expand = [col for col in source_cols if col not in memory_matches]
+        logger.debug(f"Found memory matches: {memory_matches}")
     
-    # Only process columns that need expansion
+    # Process source columns
+    columns_to_expand = [col for col in source_cols if col not in memory_matches]
+    logger.debug(f"Columns to expand: {columns_to_expand}")
+    
     if columns_to_expand:
         source_expanded = expand_abbreviations(columns_to_expand, context, deepseek_model, prompt_template, verbose)
+        logger.debug(f"Source expansions: {source_expanded}")
+        
         all_expanded = []
         expansion_index = 0
         for col in source_cols:
@@ -372,17 +392,23 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
     else:
         all_expanded = [f"MEMORY_MATCH:{col}" for col in source_cols]
     
-    # Expand destination columns
-    dest_expanded = expand_abbreviations(dest_cols, context, deepseek_model, prompt_template, verbose)
+    logger.debug(f"All source expansions: {all_expanded}")
     
-    # Ensure only the top three predictions are used for destination columns
+    # Process destination columns
+    dest_expanded = expand_abbreviations(dest_cols, context, deepseek_model, prompt_template, verbose)
+    logger.debug(f"Initial destination expansions: {dest_expanded}")
+    
+    # Double-check destination expansions are limited to three
     dest_expanded = [' | '.join(exp.split(prompt_template.sep_token)[:3]) for exp in dest_expanded]
+    logger.debug(f"Final destination expansions after limiting: {dest_expanded}")
     
     # Match columns
     matches, all_comparisons, highest_similarity_pair = match_columns(
         source_cols, dest_cols, all_expanded, dest_expanded, 
         semantic_model, memory_matches=memory_matches
     )
+    
+    logger.debug(f"Generated matches: {matches}")
     
     # Save new matches if requested
     if use_memory and save_new_matches and column_memory:
@@ -391,6 +417,7 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
             dest_col = match["dest_column"]
             if match["similarity_score"] > 0.85:
                 column_memory.add_match(source_col, dest_col)
+                logger.debug(f"Saved new match: {source_col} -> {dest_col}")
     
     return matches, all_comparisons, highest_similarity_pair
 
