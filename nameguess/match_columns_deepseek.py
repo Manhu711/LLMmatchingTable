@@ -9,6 +9,7 @@ import numpy as np
 from column_memory import ColumnMatchMemory
 import streamlit as st
 from simple_medical_rag import SimpleMedicalRAG
+import re
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -110,68 +111,85 @@ def extract_answer(raw_answer_str: str, sep_token: str, abbreviations: list):
         # Log the raw answer for debugging
         logger.info(f"Raw answer from LLM: {raw_answer_str}")
         
-        # Clean the answer string
+        # Clean the raw answer string
         raw_answer_str = raw_answer_str.strip()
         
-        # First attempt: Split on sep_token (expected format)
-        # Try to find the actual list of expansions - most direct format
-        answer_list = [_ans.strip() for _ans in raw_answer_str.split(sep_token)]
-        if len(answer_list) == len(abbreviations):
-            logger.info(f"Successfully parsed with separator token: {answer_list}")
-            return answer_list
-        
-        # Second attempt: Look for a clear list-like format with the same number of items
-        import re
-        list_pattern = r"(?:^|\n)(?:\d+[\.\)]\s*)?(.+?)(?:$|\n)"
-        matches = re.findall(list_pattern, raw_answer_str)
-        if len(matches) == len(abbreviations):
-            logger.info(f"Successfully parsed with list pattern: {matches}")
-            return [match.strip() for match in matches]
-        
-        # Third attempt: Look for direct mappings in the text
+        # Initialize predictions list
         predictions = []
-        for abbr in abbreviations:
-            # Try multiple patterns to capture different response formats
-            patterns = [
-                rf"`{abbr}`[^-]*stands for \"([^\"]+)\"",  # `BP` stands for "Blood Pressure"
-                rf"{abbr}[^-]*means \"([^\"]+)\"",         # BP means "Blood Pressure"
-                rf"{abbr}[^-]*:[ \t]*([^\n\.,]+)",         # BP: Blood Pressure
-                rf"{abbr}[ \t]+->[ \t]+([^\n\.,]+)"        # BP -> Blood Pressure
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, raw_answer_str, re.IGNORECASE)
-                if match:
-                    expanded_name = match.group(1).strip()
-                    predictions.append(expanded_name)
-                    logger.info(f"Matched {abbr} to {expanded_name} using pattern {pattern}")
-                    break
+        
+        # First attempt: Split on sep_token (expected format)
+        answer_list = [ans.strip() for ans in raw_answer_str.split(sep_token)]
+        
+        # Match each abbreviation with its expansion
+        for i, abbr in enumerate(abbreviations):
+            if i < len(answer_list):
+                # Take only the first expansion for each abbreviation
+                expansion = answer_list[i].strip()
+                # Remove any instances of other abbreviations or their expansions
+                for other_abbr in abbreviations:
+                    if other_abbr != abbr and other_abbr in expansion:
+                        expansion = expansion.split(other_abbr)[0].strip()
+                predictions.append(expansion)
             else:
-                # If no match found, try to find any mention of this abbreviation followed by text
-                general_pattern = rf"(?:^|\n|\s){re.escape(abbr)}(?:\s|:)+(.*?)(?:\n|$|\.|,)"
-                match = re.search(general_pattern, raw_answer_str, re.IGNORECASE)
-                if match:
-                    expanded_name = match.group(1).strip()
-                    predictions.append(expanded_name)
-                    logger.info(f"Matched {abbr} to {expanded_name} using general pattern")
-                else:
-                    predictions.append(abbr)  # Fall back to the abbreviation itself
-                    logger.warning(f"Could not find expansion for {abbr}")
+                predictions.append("")
         
-        if len(predictions) == len(abbreviations):
-            logger.info(f"Successfully parsed with direct mapping patterns: {predictions}")
-            return predictions
-            
-        # If we still don't have enough predictions, fill with empty strings
+        # If we didn't get enough predictions, try alternative parsing
         if len(predictions) < len(abbreviations):
-            logger.warning(f"Not enough predictions ({len(predictions)}) for abbreviations ({len(abbreviations)})")
-            predictions.extend([" "] * (len(abbreviations) - len(predictions)))
+            logger.warning("First attempt at parsing failed, trying alternative method")
+            predictions = []
+            
+            # Look for direct mappings in the text
+            for abbr in abbreviations:
+                # Try multiple patterns to capture different response formats
+                patterns = [
+                    rf"{re.escape(abbr)}[^-]*?:[ \t]*([^\n\.|]+)",  # abbr: expansion
+                    rf"{re.escape(abbr)}[ \t]+->[ \t]+([^\n\.|]+)",  # abbr -> expansion
+                    rf"{re.escape(abbr)}[^-]*?means[ \t]*[\"']([^\"']+)[\"']",  # abbr means "expansion"
+                    rf"{re.escape(abbr)}[^-]*?is[ \t]*[\"']([^\"']+)[\"']"  # abbr is "expansion"
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, raw_answer_str, re.IGNORECASE)
+                    if match:
+                        expansion = match.group(1).strip()
+                        # Remove any instances of other abbreviations or their expansions
+                        for other_abbr in abbreviations:
+                            if other_abbr != abbr and other_abbr in expansion:
+                                expansion = expansion.split(other_abbr)[0].strip()
+                        predictions.append(expansion)
+                        break
+                else:
+                    # If no pattern matched, use a fallback
+                    predictions.append(abbr)
         
-        return predictions[:len(abbreviations)]  # Ensure correct length
+        logger.debug(f"Extracted predictions: {predictions}")
+        
+        # Ensure we have the correct number of predictions
+        if len(predictions) > len(abbreviations):
+            predictions = predictions[:len(abbreviations)]
+        elif len(predictions) < len(abbreviations):
+            predictions.extend([""] * (len(abbreviations) - len(predictions)))
+        
+        # Final cleanup: ensure each prediction is unique and doesn't contain other column names
+        final_predictions = []
+        for i, pred in enumerate(predictions):
+            # Clean up the prediction by removing any other column names or their expansions
+            clean_pred = pred
+            for j, other_abbr in enumerate(abbreviations):
+                if i != j:  # Don't remove the current abbreviation
+                    if other_abbr in clean_pred:
+                        clean_pred = clean_pred.split(other_abbr)[0].strip()
+                    if predictions[j] in clean_pred and predictions[j] != clean_pred:
+                        clean_pred = clean_pred.split(predictions[j])[0].strip()
+            
+            final_predictions.append(clean_pred)
+        
+        logger.debug(f"Final cleaned predictions: {final_predictions}")
+        return final_predictions
         
     except Exception as e:
         logger.error(f"Error extracting answer: {str(e)}")
-        return [" "] * len(abbreviations)
+        return [""] * len(abbreviations)
 
 class PromptTemplate:
     @property
