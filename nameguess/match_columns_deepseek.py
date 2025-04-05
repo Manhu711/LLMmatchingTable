@@ -192,14 +192,11 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     """Expand abbreviations using the LLM and simplified medical RAG."""
     global medical_rag
     
-    # Add debug logging
-    logger.info(f"Starting expansion for abbreviations: {abbreviations}")
-    
     # Initialize RAG if not already done
     if medical_rag is None:
         init_rag()
     
-    # Construct prompt with emphasis on single best expansion
+    # Construct prompt
     query = f"Expand: {' | '.join(abbreviations)} "
     context_part = f"Context: {context}. " if context else ""
     
@@ -213,40 +210,28 @@ def expand_abbreviations(abbreviations: list, context: str, model: DeepSeekLLM,
     
     if rag_context:
         rag_context = f"Medical abbreviation reference:\n{rag_context}\n"
-        logger.debug(f"Using RAG context: {rag_context}")
+        if verbose:
+            print("Using medical RAG context:", rag_context)
     
     prompt = (
         f"{context_part}{rag_context}{prompt_template.demos}{query}"
-        "IMPORTANT: For each abbreviation, provide ONLY THE SINGLE MOST LIKELY expanded name. "
-        "Do not provide multiple options or alternatives. "
-        "Separate each expansion with ' | '. "
-        "Focus on the most accurate and commonly used expansion in medical context."
+        "Provide the expanded names as a list separated by ' | '. "
+        "Do not include additional explanations."
     )
 
-    logger.debug(f"Generated prompt: {prompt}")
+    if verbose:
+        print("\nPrompt:", prompt)
+
     raw_answer = model(prompt)
-    logger.debug(f"Raw model response: {raw_answer}")
-    
     time.sleep(1)  # Rate limiting
     
-    # Extract single expansion for each abbreviation
     predictions = extract_answer(raw_answer, prompt_template.sep_token, abbreviations)
-    logger.debug(f"Initial predictions: {predictions}")
     
-    # Ensure single prediction per abbreviation
-    final_predictions = []
-    for pred in predictions:
-        # Take only the first expansion if multiple are provided
-        expansion = pred.split(prompt_template.sep_token)[0].strip()
-        final_predictions.append(expansion)
-    
-    logger.debug(f"Final predictions (single expansion): {final_predictions}")
-    
-    if len(final_predictions) != len(abbreviations):
-        logger.warning(f"Mismatch in predictions length. Expected {len(abbreviations)}, got {len(final_predictions)}")
-        final_predictions = [" "] * len(abbreviations)
+    if len(predictions) != len(abbreviations):
+        logger.warning(f"Mismatch in predictions length. Expected {len(abbreviations)}, got {len(predictions)}")
+        predictions = [" "] * len(abbreviations)
 
-    return final_predictions
+    return predictions
 
 @st.cache_resource
 def load_models():
@@ -345,79 +330,59 @@ def match_columns(source_cols, dest_cols, source_expanded, dest_expanded,
 
 def process_files(source_file, dest_file, context=None, use_memory=True, memory_file="data/column_matches.json", save_new_matches=True):
     """Process source and destination files to match columns."""
-    logger.info("Starting process_files")
-    logger.debug(f"Processing source file: {source_file}")
-    logger.debug(f"Processing destination file: {dest_file}")
-    
     # Initialize our column memory
     if use_memory:
+        # Ensure data directory exists
         os.makedirs(os.path.dirname(os.path.abspath(memory_file)), exist_ok=True)
         column_memory = ColumnMatchMemory(memory_file)
-        logger.debug("Column memory initialized")
     else:
         column_memory = None
-        logger.debug("Column memory disabled")
     
-    # Load files and get columns
-    source_df = pd.read_csv(source_file)
-    dest_df = pd.read_csv(dest_file)
-    source_cols = list(source_df.columns)
-    dest_cols = list(dest_df.columns)
-    
-    logger.debug(f"Source columns: {source_cols}")
-    logger.debug(f"Destination columns: {dest_cols}")
+    # ... existing code to load files and get columns ...
     
     # Check memory for existing matches
     memory_matches = {}
     if use_memory and column_memory:
         memory_matches = column_memory.find_matches(source_cols, dest_cols)
-        logger.debug(f"Found memory matches: {memory_matches}")
-    
-    # Process source columns
-    columns_to_expand = [col for col in source_cols if col not in memory_matches]
-    logger.debug(f"Columns to expand: {columns_to_expand}")
-    
-    if columns_to_expand:
-        source_expanded = expand_abbreviations(columns_to_expand, context, deepseek_model, prompt_template, verbose)
-        logger.debug(f"Source expansions: {source_expanded}")
         
+    # Determine which columns need expansion through the LLM
+    columns_to_expand = [col for col in source_cols if col not in memory_matches]
+    
+    # Only process columns that need expansion
+    if columns_to_expand:
+        # ... existing code for abbreviation expansion ...
+        source_expanded = expand_abbreviations(columns_to_expand, context, deepseek_model, prompt_template, verbose)
+        # Create full source_expanded list by combining memory and new expansions
         all_expanded = []
         expansion_index = 0
         for col in source_cols:
             if col in memory_matches:
+                # Use a placeholder - we'll use memory for matching directly
                 all_expanded.append(f"MEMORY_MATCH:{col}")
             else:
                 all_expanded.append(source_expanded[expansion_index])
                 expansion_index += 1
     else:
+        # If all columns are in memory, we still need a placeholder list
         all_expanded = [f"MEMORY_MATCH:{col}" for col in source_cols]
     
-    logger.debug(f"All source expansions: {all_expanded}")
-    
-    # Process destination columns
+    # Expand destination columns as normal
     dest_expanded = expand_abbreviations(dest_cols, context, deepseek_model, prompt_template, verbose)
-    logger.debug(f"Initial destination expansions: {dest_expanded}")
     
-    # Double-check destination expansions are limited to three
-    dest_expanded = [' | '.join(exp.split(prompt_template.sep_token)[:3]) for exp in dest_expanded]
-    logger.debug(f"Final destination expansions after limiting: {dest_expanded}")
-    
-    # Match columns
+    # Modify the match_columns function call
     matches, all_comparisons, highest_similarity_pair = match_columns(
         source_cols, dest_cols, all_expanded, dest_expanded, 
         semantic_model, memory_matches=memory_matches
     )
-    
-    logger.debug(f"Generated matches: {matches}")
     
     # Save new matches if requested
     if use_memory and save_new_matches and column_memory:
         for match in matches:
             source_col = match["source_column"]
             dest_col = match["dest_column"]
-            if match["similarity_score"] > 0.85:
+            # Only save matches with high confidence
+            if match["similarity_score"] > 0.85:  # Threshold can be adjusted
                 column_memory.add_match(source_col, dest_col)
-                logger.debug(f"Saved new match: {source_col} -> {dest_col}")
     
     return matches, all_comparisons, highest_similarity_pair
 
