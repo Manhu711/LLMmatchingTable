@@ -236,10 +236,10 @@ def match_columns(source_cols, dest_cols, source_expanded, dest_expanded,
     if memory_matches is None:
         memory_matches = {}
         
-    # Ensure all expanded names are strings
-    source_expanded = [str(exp) if exp and exp.strip() else f"Column {src}" 
+    # Ensure all expanded names are strings and clean
+    source_expanded = [str(exp).strip() if exp and exp.strip() else f"Column {src}" 
                       for src, exp in zip(source_cols, source_expanded)]
-    dest_expanded = [str(exp) if exp and exp.strip() else f"Column {dst}" 
+    dest_expanded = [str(exp).strip() if exp and exp.strip() else f"Column {dst}" 
                     for dst, exp in zip(dest_cols, dest_expanded)]
     
     # Compute embeddings and similarities
@@ -247,12 +247,8 @@ def match_columns(source_cols, dest_cols, source_expanded, dest_expanded,
     dest_embeddings = semantic_model.encode(dest_expanded, convert_to_tensor=True)
     similarity_matrix = util.cos_sim(source_embeddings, dest_embeddings)
     
-    # Generate all comparisons
+    # Generate matches
     matches = []
-    all_comparisons = []
-    highest_similarity = 0
-    highest_similarity_pair = None
-    
     for i, (src_col, src_exp) in enumerate(zip(source_cols, source_expanded)):
         # Check if we have a memory match first
         if src_col in memory_matches:
@@ -274,48 +270,17 @@ def match_columns(source_cols, dest_cols, source_expanded, dest_expanded,
         best_match_idx = similarities.argmax().item()
         best_score = similarities[best_match_idx].item()
         
-        # Track highest similarity pair
-        if best_score > highest_similarity:
-            highest_similarity = best_score
-            highest_similarity_pair = {
-                "source_column": src_col,
-                "source_expanded": src_exp,
-                "dest_column": dest_cols[best_match_idx],
-                "dest_expanded": dest_expanded[best_match_idx],
-                "similarity_score": best_score
-            }
-        
-        # Store all comparisons
-        for j, (dst_col, dst_exp) in enumerate(zip(dest_cols, dest_expanded)):
-            score = similarities[j].item()
-            all_comparisons.append({
-                "source_column": src_col,
-                "source_expanded": src_exp,
-                "dest_column": dst_col,
-                "dest_expanded": dst_exp,
-                "similarity_score": score
-            })
-        
-        # Create match entry
-        if best_score < similarity_threshold:
-            match = {
-                "source_column": src_col,
-                "source_expanded": src_exp,
-                "dest_column": "NO_MATCH",
-                "dest_expanded": "NO_MATCH",
-                "similarity_score": best_score
-            }
-        else:
-            match = {
-                "source_column": src_col,
-                "source_expanded": src_exp,
-                "dest_column": dest_cols[best_match_idx],
-                "dest_expanded": dest_expanded[best_match_idx],
-                "similarity_score": best_score
-            }
+        match = {
+            "source_column": src_col,
+            "source_expanded": src_exp,
+            "dest_column": dest_cols[best_match_idx] if best_score >= similarity_threshold else "NO_MATCH",
+            "dest_expanded": dest_expanded[best_match_idx] if best_score >= similarity_threshold else "NO_MATCH",
+            "similarity_score": best_score,
+            "from_memory": False
+        }
         matches.append(match)
     
-    return matches, all_comparisons, highest_similarity_pair
+    return matches
 
 def process_files(source_file, dest_file, context=None, use_memory=True, memory_file="data/column_matches.json", save_new_matches=True):
     """Process source and destination files to match columns."""
@@ -359,7 +324,7 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
     dest_expanded = expand_abbreviations(dest_cols, context, deepseek_model, prompt_template, verbose)
     
     # Modify the match_columns function call
-    matches, all_comparisons, highest_similarity_pair = match_columns(
+    matches = match_columns(
         source_cols, dest_cols, all_expanded, dest_expanded, 
         semantic_model, memory_matches=memory_matches
     )
@@ -373,7 +338,7 @@ def process_files(source_file, dest_file, context=None, use_memory=True, memory_
             if match["similarity_score"] > 0.85:  # Threshold can be adjusted
                 column_memory.add_match(source_col, dest_col)
     
-    return matches, all_comparisons, highest_similarity_pair
+    return matches
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -422,7 +387,7 @@ if __name__ == "__main__":
 
     print(f"Using model: {args.model_name}")
     print("Expanding source table columns...")
-    matches, all_comparisons, highest_similarity_pair = process_files(source_cols, dest_cols, args.context, args.verbose)
+    matches = process_files(source_cols, dest_cols, args.context, args.verbose)
 
     # Print all comparisons
     print("\nAll Comparisons:")

@@ -78,156 +78,42 @@ def get_dest_options(source_col, all_comparisons):
     dest_options.sort(key=lambda x: x['score'], reverse=True)
     return dest_options
 
-def display_matches(matches, all_comparisons):
-    """Display matches with editing capability"""
-    st.subheader("Column Matching Results")
+def display_matches(matches, source_df, dest_df):
+    """Display the column matches and allow for editing."""
+    st.header("Step 3: Review Column Interpretations")
     
-    # Ensure we have edited_matches in session state
-    if 'edited_matches' not in st.session_state:
-        st.session_state.edited_matches = matches.copy()
+    # Create two columns for source and destination tables
+    col1, col2 = st.columns(2)
     
-    # Ensure we have editing_state in session state
-    if 'editing_state' not in st.session_state:
-        st.session_state.editing_state = {i: False for i in range(len(matches))}
+    with col1:
+        st.subheader("Source Table Columns")
+        source_data = []
+        for match in matches:
+            source_data.append({
+                "Original Column": match["source_column"],
+                "Expanded Name": match["source_expanded"]
+            })
+        source_df_display = pd.DataFrame(source_data)
+        st.dataframe(source_df_display, hide_index=True)
     
-    # Get destination columns from session state
-    if 'dest_df' in st.session_state:
-        dest_cols = st.session_state.dest_df.columns.tolist()
-    else:
-        # Fallback options
-        dest_cols = list(set([comp["dest_column"] for comp in all_comparisons if comp["dest_column"] != "NO_MATCH"]))
-        if not dest_cols:
-            dest_cols = [match["dest_column"] for match in matches if match["dest_column"] != "NO_MATCH"]
-
-    # Add memory matches to the top of dropdown if available
-    memory_options = []
-    if 'editing_source_col' in st.session_state:
-        try:
-            from column_memory import ColumnMatchMemory
-            memory = ColumnMatchMemory(MEMORY_FILE_PATH)
-            src_col = st.session_state.editing_source_col
-            memory_matches = memory.get_match(src_col)
-            
-            if memory_matches is not None:  # Check explicitly for None
-                for mem_match in memory_matches:
-                    if mem_match in dest_cols:
-                        memory_options.append(f"🔄 {mem_match} (from memory)")
-        except Exception as e:
-            pass
-
-    # Create the dropdown options
-    dropdown_options = memory_options + dest_cols + ["-- No match --"]
-    
-    # Create a set of already matched destination columns for the current row
-    def get_current_matched_cols(current_index):
-        return {
-            match['dest_column'] for idx, match in enumerate(st.session_state.edited_matches) 
-            if match['dest_column'] != "NO_MATCH" and idx != current_index
-        }
-
-    # Now display the matches
-    for i, match in enumerate(st.session_state.edited_matches):
-        col1, col2, col3, col4, col5, col6 = st.columns([3, 3, 2, 1, 1, 1])
-        
-        with col1:
-            st.text(f"{match['source_column']} ({match['source_expanded']})")
-        
-        with col2:
-            if st.session_state.editing_state.get(i, False):
-                # Get currently matched columns excluding the current row
-                matched_dest_cols = get_current_matched_cols(i)
-                
-                # Set the correct default selection
-                if match['dest_column'] == "NO_MATCH":
-                    selected_index = len(dropdown_options) - 1
-                else:
-                    try:
-                        selected_index = dropdown_options.index(match['dest_column'])
-                    except ValueError:
-                        selected_index = 0
-
-                # Create the dropdown
-                selected_dest = st.selectbox(
-                    "Select destination column",
-                    options=dropdown_options,
-                    index=selected_index,
-                    key=f"edit_dropdown_{i}"
-                )
-
-                # Clean the selected destination value
-                clean_dest = selected_dest.replace(" (from memory)", "").replace("🔄 ", "")
-                
-                # Check for duplicate matches
-                if selected_dest != "-- No match --" and clean_dest in matched_dest_cols:
-                    # Show warning but don't disrupt the flow
-                    st.warning(f"""
-                        ⚠️ Warning: Column `{clean_dest}` is already matched to another source column.
-                        Matching multiple source columns to the same destination column is not allowed.
-                        Please choose a different destination column or use "No match".
-                    """)
-                    # Don't update the match but allow the user to make another selection
-                else:
-                    # Update the match when there's no duplicate or it's "No match"
-                    if selected_dest == "-- No match --":
-                        st.session_state.edited_matches[i]['dest_column'] = "NO_MATCH"
-                        st.session_state.edited_matches[i]['dest_expanded'] = "NO_MATCH"
-                        st.session_state.edited_matches[i]['similarity_score'] = 0.0
-                    else:
-                        st.session_state.edited_matches[i]['dest_column'] = selected_dest
-                        
-                        # Try to get the expanded name
-                        try:
-                            if 'dest_expanded' in st.session_state and 'dest_df' in st.session_state:
-                                dest_idx = st.session_state.dest_df.columns.get_loc(clean_dest)
-                                if dest_idx < len(st.session_state.dest_expanded):
-                                    st.session_state.edited_matches[i]['dest_expanded'] = st.session_state.dest_expanded[dest_idx]
-                                else:
-                                    st.session_state.edited_matches[i]['dest_expanded'] = clean_dest
-                            else:
-                                st.session_state.edited_matches[i]['dest_expanded'] = clean_dest
-                        except Exception:
-                            st.session_state.edited_matches[i]['dest_expanded'] = clean_dest
-                        
-                        # Set high similarity for manually selected
-                        st.session_state.edited_matches[i]['similarity_score'] = 1.0
-            else:
-                # Display the current match
-                if match['dest_column'] == "NO_MATCH":
-                    st.text("-- No match --")
-                else:
-                    st.text(f"{match['dest_column']} ({match['dest_expanded']})")
-        
-        with col3:
-            st.text(f"Similarity: {match['similarity_score']:.3f}")
-        
-        with col4:
-            # Instead of trying to access the button's state, use a callback
-            if st.button("Edit", key=f"edit_button_{i}"):
-                st.session_state.editing_state[i] = True
-                # Store the source column being edited for memory lookup
-                st.session_state.editing_source_col = match['source_column']
-                st.rerun()
-        
-        with col5:
-            if st.session_state.editing_state.get(i, False):
-                if st.button("Save", key=f"save_button_{i}"):
-                    st.session_state.editing_state[i] = False
-                    st.rerun()
-        
-        with col6:
-            # Add a "No Match" button that directly sets this column to have no match
-            # Only show if not already set to NO_MATCH and not in editing mode
-            if not st.session_state.editing_state.get(i, False) and match['dest_column'] != "NO_MATCH":
-                if st.button("No Match", key=f"no_match_button_{i}", 
-                            help="Mark this column as having no match in the destination table"):
-                    # Set to NO_MATCH
-                    st.session_state.edited_matches[i]['dest_column'] = "NO_MATCH"
-                    st.session_state.edited_matches[i]['dest_expanded'] = "NO_MATCH"
-                    st.session_state.edited_matches[i]['similarity_score'] = 0.0
-                    st.rerun()
-            # If already NO_MATCH, show a disabled button or indicator
-            elif not st.session_state.editing_state.get(i, False) and match['dest_column'] == "NO_MATCH":
-                st.markdown("✓ No Match")
+    with col2:
+        st.subheader("Destination Table Columns")
+        dest_data = []
+        # Get unique destination columns
+        dest_cols = list(dest_df.columns)
+        for dest_col in dest_cols:
+            # Find the expansion for this destination column
+            expansion = next(
+                (match["dest_expanded"] for match in matches 
+                 if match["dest_column"] == dest_col),
+                dest_col  # fallback to original name if no expansion found
+            )
+            dest_data.append({
+                "Original Column": dest_col,
+                "Expanded Name": expansion
+            })
+        dest_df_display = pd.DataFrame(dest_data)
+        st.dataframe(dest_df_display, hide_index=True)
 
 @st.cache_resource
 def load_semantic_model():
@@ -239,9 +125,9 @@ def load_models():
     try:
         # Set API key directly from environment variable
         deepseek_model = DeepSeekLLM()  # The model will get the API key from environment
-        prompt_template = PromptTemplate()
+    prompt_template = PromptTemplate()
         semantic_model = load_semantic_model()
-        return deepseek_model, prompt_template, semantic_model
+    return deepseek_model, prompt_template, semantic_model
     except Exception as e:
         st.error(f"Error loading models: {str(e)}")
         raise
@@ -465,8 +351,8 @@ def main():
     # Initialize models first
     if 'models' not in st.session_state:
         try:
-            with st.spinner('Loading models...'):
-                st.session_state.models = load_models()
+        with st.spinner('Loading models...'):
+            st.session_state.models = load_models()
         except Exception as e:
             st.error("Failed to load required models. Please check your configuration.")
             st.exception(e)
@@ -602,21 +488,7 @@ def main():
             # Display results if available
             if 'matches' in st.session_state:
                 # Display column interpretations
-                st.markdown("### Step 3: Review Column Interpretations")
-                source_table, dest_table = create_aligned_tables(
-                    source_df.columns.tolist(),
-                    st.session_state.source_expanded,
-                    dest_df.columns.tolist(),
-                    st.session_state.dest_expanded
-                )
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader("Source Table Columns")
-                    st.dataframe(source_table, hide_index=True)
-                with col2:
-                    st.subheader("Destination Table Columns")
-                    st.dataframe(dest_table, hide_index=True)
+                display_matches(st.session_state.matches, source_df, dest_df)
                 
                 # Display matches
                 st.markdown("""
@@ -630,7 +502,7 @@ def main():
                 - Use the "Edit" button to change matches
                 - Use the "No Match" button to mark columns that don't have a corresponding match
                 """)
-                display_matches(st.session_state.matches, st.session_state.all_comparisons)
+                display_matches(st.session_state.matches, source_df, dest_df)
                 
                 # Confirm matching button
                 if st.button("Confirm Matching"):
